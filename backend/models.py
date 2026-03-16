@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Boolean, UniqueConstra
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
+from sqlalchemy import Text
 
 class User(Base):
     __tablename__ = "users"
@@ -31,7 +32,7 @@ class Equipment(Base):
     item_number = Column(String(100), nullable=False, index=True)
     available = Column(Boolean, default=True)
     status = Column(String(50), nullable=True, default="Available")
-    image = Column(String(16777215), nullable=True)  # LONGTEXT for base64 image data
+    image = Column(Text, nullable=True)  # LONGTEXT for base64 image data
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -44,7 +45,7 @@ class Room(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
-    image = Column(String(16777215), nullable=True)
+    image = Column(Text, nullable=True)
     available = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
