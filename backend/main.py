@@ -28,7 +28,10 @@ app.add_middleware(
 
 # Import models so metadata is registered, then create tables
 import models  # noqa: F401
-Base.metadata.create_all(bind=engine)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    print("Database tables already exist or error creating tables:", e)
 
 # include routers
 app.include_router(auth_router)
