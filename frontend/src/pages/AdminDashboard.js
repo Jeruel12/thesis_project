@@ -186,7 +186,7 @@ function AdminDashboard({ onLogout }) {
       const token = localStorage.getItem('access_token');
       
       // Fetch peak usage data
-      const peakRes = await fetch('http://localhost:8000/analytics/peak-usage', {
+      const peakRes = await fetch('https://backend-58cw.onrender.com/analytics/peak-usage', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (peakRes.ok) {
@@ -194,7 +194,7 @@ function AdminDashboard({ onLogout }) {
       }
 
       // Fetch demand forecast
-      const forecastRes = await fetch('http://localhost:8000/analytics/demand-forecast', {
+      const forecastRes = await fetch('https://backend-58cw.onrender.com/analytics/demand-forecast', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (forecastRes.ok) {
@@ -202,7 +202,7 @@ function AdminDashboard({ onLogout }) {
       }
 
       // Fetch equipment health data
-      const healthRes = await fetch('http://localhost:8000/analytics/equipment-health', {
+      const healthRes = await fetch('https://backend-58cw.onrender.com/analytics/equipment-health', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (healthRes.ok) {
@@ -210,7 +210,7 @@ function AdminDashboard({ onLogout }) {
       }
 
       // Fetch recommendations
-      const recsRes = await fetch('http://localhost:8000/analytics/recommendations', {
+      const recsRes = await fetch('https://backend-58cw.onrender.com/analytics/recommendations', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (recsRes.ok) {
@@ -223,7 +223,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8000/auth/stats', {
+      const res = await fetch('https://backend-58cw.onrender.com/auth/stats', {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -239,7 +239,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchUsers = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8000/auth/users', {
+      const res = await fetch('https://backend-58cw.onrender.com/auth/users', {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -362,7 +362,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchEquipment = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8000/equipment/', {
+      const res = await fetch('https://backend-58cw.onrender.com/equipment/', {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -386,7 +386,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchRooms = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8000/rooms/', {
+      const res = await fetch('https://backend-58cw.onrender.com/rooms/', {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -405,7 +405,7 @@ function AdminDashboard({ onLogout }) {
       const token = localStorage.getItem('access_token');
       console.log('DEBUG - Fetching reservations with token:', token ? 'present' : 'missing');
       
-      const res = await fetch('http://localhost:8000/reservations/', {
+      const res = await fetch('https://backend-58cw.onrender.com/reservations/', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -434,7 +434,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchEquipmentReturns = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8000/equipment-returns/', {
+      const res = await fetch('https://backend-58cw.onrender.com/equipment-returns/', {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -583,7 +583,7 @@ function AdminDashboard({ onLogout }) {
       approved_by_name: approverName
     };
     try {
-      const res = await fetch(`http://localhost:8000/reservations/${reservationId}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/reservations/${reservationId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -611,7 +611,7 @@ function AdminDashboard({ onLogout }) {
                 itemDisplay = room.name;
               }
             }
-            await fetch('http://localhost:8000/notifications/', {
+            await fetch('https://backend-58cw.onrender.com/notifications/', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -675,7 +675,7 @@ function AdminDashboard({ onLogout }) {
       rejection_reason: reason
     };
     try {
-      const res = await fetch(`http://localhost:8000/reservations/${reservationId}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/reservations/${reservationId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -708,7 +708,7 @@ function AdminDashboard({ onLogout }) {
     
     try {
       // Delete the reservation from the backend
-      const delRes = await fetch(`http://localhost:8000/reservations/${deleteReservationId}`, {
+      const delRes = await fetch(`https://backend-58cw.onrender.com/reservations/${deleteReservationId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -726,7 +726,7 @@ function AdminDashboard({ onLogout }) {
         const eq = equipment.find(e => String(e.id) === String(target.item_id));
         if (eq) {
           try {
-            await fetch(`http://localhost:8000/equipment/${eq.id}`, {
+            await fetch(`https://backend-58cw.onrender.com/equipment/${eq.id}`, {
               method: 'PUT',
               headers: {
                 'Content-Type': 'application/json',
@@ -788,7 +788,7 @@ function AdminDashboard({ onLogout }) {
               itemDisplay = room.name;
             }
           }
-          await fetch('http://localhost:8000/notifications/', {
+          await fetch('https://backend-58cw.onrender.com/notifications/', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -809,7 +809,7 @@ function AdminDashboard({ onLogout }) {
 
       // Attempt to delete the reservation from the backend
       try {
-        const delRes = await fetch(`http://localhost:8000/reservations/${rejectReservationId}`, {
+        const delRes = await fetch(`https://backend-58cw.onrender.com/reservations/${rejectReservationId}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -827,7 +827,7 @@ function AdminDashboard({ onLogout }) {
         const eq = equipment.find(e => String(e.id) === String(target.item_id));
         if (eq) {
           try {
-            await fetch(`http://localhost:8000/equipment/${eq.id}`, {
+            await fetch(`https://backend-58cw.onrender.com/equipment/${eq.id}`, {
               method: 'PUT',
               headers: {
                 'Content-Type': 'application/json',
@@ -902,7 +902,7 @@ function AdminDashboard({ onLogout }) {
       console.log('Equipment update payload:', updatePayload);
       console.log('Equipment ID:', equipmentItem.id);
       
-      const equipRes = await fetch(`http://localhost:8000/equipment/${equipmentItem.id}`, {
+      const equipRes = await fetch(`https://backend-58cw.onrender.com/equipment/${equipmentItem.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -959,7 +959,7 @@ function AdminDashboard({ onLogout }) {
       
       console.log('Return payload:', returnPayload);
       
-      const dbRes = await fetch('http://localhost:8000/equipment-returns/', {
+      const dbRes = await fetch('https://backend-58cw.onrender.com/equipment-returns/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -980,7 +980,7 @@ function AdminDashboard({ onLogout }) {
       // Step 3: Delete the reservation
       console.log('Step 3: Deleting reservation...');
       try {
-        const delRes = await fetch(`http://localhost:8000/reservations/${returnReservationId}`, {
+        const delRes = await fetch(`https://backend-58cw.onrender.com/reservations/${returnReservationId}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -1155,7 +1155,7 @@ function AdminDashboard({ onLogout }) {
     }
 
     try {
-      const res = await fetch(`http://localhost:8000/reservations/${editReservationData.id}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/reservations/${editReservationData.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1213,7 +1213,7 @@ function AdminDashboard({ onLogout }) {
     if (!item) return;
 
     try {
-      const res = await fetch(`http://localhost:8000/equipment/${equipmentId}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/equipment/${equipmentId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1259,7 +1259,7 @@ function AdminDashboard({ onLogout }) {
 
       let successCount = 0;
       for (const update of updates) {
-        const res = await fetch(`http://localhost:8000/equipment/${update.id}`, {
+        const res = await fetch(`https://backend-58cw.onrender.com/equipment/${update.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -1390,7 +1390,7 @@ function AdminDashboard({ onLogout }) {
         ? equipmentName.toUpperCase()
         : getEquipmentCategory(newEquipment.name);
       
-      const res = await fetch('http://localhost:8000/equipment/', {
+      const res = await fetch('https://backend-58cw.onrender.com/equipment/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1435,7 +1435,7 @@ function AdminDashboard({ onLogout }) {
 
   const confirmDeleteEquipment = async () => {
     try {
-      const res = await fetch(`http://localhost:8000/equipment/${equipmentToDelete}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/equipment/${equipmentToDelete}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -1458,7 +1458,7 @@ function AdminDashboard({ onLogout }) {
 
   const confirmDeleteRoom = async () => {
     try {
-      const res = await fetch(`http://localhost:8000/rooms/${roomToDelete}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/rooms/${roomToDelete}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -1515,7 +1515,7 @@ function AdminDashboard({ onLogout }) {
           reader.readAsDataURL(newRoom.image);
         });
       }
-      const res = await fetch('http://localhost:8000/rooms/', {
+      const res = await fetch('https://backend-58cw.onrender.com/rooms/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1579,7 +1579,7 @@ function AdminDashboard({ onLogout }) {
         });
       }
 
-      const res = await fetch(`http://localhost:8000/rooms/${editRoomData.id}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/rooms/${editRoomData.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1648,7 +1648,7 @@ function AdminDashboard({ onLogout }) {
         payload.image = imageData;
       }
 
-      const res = await fetch(`http://localhost:8000/equipment/${editEquipmentData.id}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/equipment/${editEquipmentData.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1674,7 +1674,7 @@ function AdminDashboard({ onLogout }) {
 
   const handleToggleRoomAvailability = async (room) => {
     try {
-      const res = await fetch(`http://localhost:8000/rooms/${room.id}`, {
+      const res = await fetch(`https://backend-58cw.onrender.com/rooms/${room.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
