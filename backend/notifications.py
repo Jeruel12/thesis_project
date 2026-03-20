@@ -6,6 +6,7 @@ from typing import List, Optional
 from utils import decode_access_token
 from pydantic import BaseModel
 from datetime import datetime
+from realtime import emit_from_sync
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
@@ -81,6 +82,15 @@ def create_notification(notif: NotificationCreate, db: Session = Depends(get_db)
     db.add(db_notif)
     db.commit()
     db.refresh(db_notif)
+
+    emit_from_sync(
+        {
+            "type": "notification.created",
+            "user_id": db_notif.user_id,
+            "notification_id": db_notif.id,
+        },
+        user_id=db_notif.user_id,
+    )
     return db_notif
 
 
@@ -110,6 +120,15 @@ def mark_as_read(notif_id: int, db: Session = Depends(get_db)):
     
     notif.read = True
     db.commit()
+
+    emit_from_sync(
+        {
+            "type": "notification.read",
+            "user_id": notif.user_id,
+            "notification_id": notif.id,
+        },
+        user_id=notif.user_id,
+    )
     return {"message": "Notification marked as read"}
 
 
@@ -120,6 +139,16 @@ def delete_notification(notif_id: int, db: Session = Depends(get_db)):
     if not notif:
         raise HTTPException(status_code=404, detail="Notification not found")
     
+    user_id = notif.user_id
     db.delete(notif)
     db.commit()
+
+    emit_from_sync(
+        {
+            "type": "notification.deleted",
+            "user_id": user_id,
+            "notification_id": notif_id,
+        },
+        user_id=user_id,
+    )
     return {"message": "Notification deleted"}

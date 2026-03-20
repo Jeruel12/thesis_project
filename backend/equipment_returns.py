@@ -5,6 +5,7 @@ from models import EquipmentReturn, Equipment, User
 from schemas import EquipmentReturnCreate, EquipmentReturnOut
 from datetime import datetime
 import logging
+from realtime import emit_from_sync
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,17 @@ def create_equipment_return(return_data: EquipmentReturnCreate, db: Session = De
         
         db.commit()
         logger.info(f"✓ Equipment return saved successfully: ID={db_return.id}, user={username}, equipment={equipment.name}")
+
+        emit_from_sync(
+            {
+                "type": "equipment_return.created",
+                "return_id": db_return.id,
+                "user_id": db_return.user_id,
+                "reservation_id": db_return.reservation_id,
+                "equipment_id": db_return.equipment_id,
+            },
+            user_id=db_return.user_id if db_return.user_id else None,
+        )
         return db_return
     except HTTPException:
         raise

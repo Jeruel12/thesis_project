@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from database import SessionLocal
 from models import User, Equipment
@@ -95,6 +96,28 @@ def update_user(user_id: int, user_data: UserUpdate, db: Session = Depends(get_d
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.delete("/user/{user_id}")
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.role == "admin":
+        raise HTTPException(status_code=403, detail="Cannot delete administrator account")
+
+    try:
+        db.delete(user)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot delete user because related records exist. Please remove related reservations/returns first."
+        )
+
+    return {"detail": "User deleted successfully"}
+
 
 @router.get("/users", response_model=list[UserOut])
 def get_all_users(db: Session = Depends(get_db)):

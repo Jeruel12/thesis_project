@@ -8,19 +8,27 @@ function LoginForm({ onClose, onRegister, onLoginSuccess }) {
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const formatApiError = (err) => {
+    if (!err) return '';
+    if (typeof err === 'string') return err;
+    if (Array.isArray(err)) return err.map(item => item?.msg || item?.detail || JSON.stringify(item)).join('; ');
+    if (typeof err === 'object') return err.detail ? formatApiError(err.detail) : err.msg || JSON.stringify(err);
+    return String(err);
+  };
+
   async function handleSubmit(e){
     e.preventDefault();
     setError('');
     if(!idNumber.trim() || !password) { setError('ID and password are required'); return; }
     setLoading(true);
     try{
-      const res = await fetch('https://backend-58cw.onrender.com/auth/login', {
+      const res = await fetch('http://127.0.0.1:8000/auth/login', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ id_number: idNumber, password })
       });
       const data = await res.json();
-      if(!res.ok){ setError(data.detail || 'Login failed'); setLoading(false); return; }
+      if(!res.ok){ setError(formatApiError(data.detail || data) || 'Login failed'); setLoading(false); return; }
       localStorage.setItem('access_token', data.access_token);
       localStorage.setItem('user_fullname', data.fullname);
       localStorage.setItem('user_id', data.user_id);

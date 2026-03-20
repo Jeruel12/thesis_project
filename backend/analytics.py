@@ -60,7 +60,15 @@ def get_peak_usage(db: Session = Depends(get_db)):
         if res.time_from:
             try:
                 hour = int(str(res.time_from).split(':')[0])
-                time_counts[f"{hour}:00 - {hour+1}:00"] += 1
+                minute = str(res.time_from).split(':')[1] if ':' in str(res.time_from) else '00'
+                # For room reservations with end time, show range. For equipment (no end time), show just start
+                if isinstance(res, RoomReservation) and res.time_to:
+                    end_hour = int(str(res.time_to).split(':')[0])
+                    end_minute = str(res.time_to).split(':')[1] if ':' in str(res.time_to) else '00'
+                    time_counts[f"{hour}:{minute} - {end_hour}:{end_minute}"] += 1
+                else:
+                    # Equipment reservation or no end time
+                    time_counts[f"{hour}:{minute}"] += 1
             except:
                 pass
         

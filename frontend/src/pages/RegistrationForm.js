@@ -1,16 +1,16 @@
-        import React, { useState } from 'react';
-        import '../styles/RegistrationForm.css';
+import React, { useState } from 'react';
+import '../styles/RegistrationForm.css';
+import { API_BASE_URL } from '../config';
 
-        const departments = [
-          '',
-          'BED',
-          'HED',
-          'FACULTY',
-          'NTP',
-          
-        ];
+const departments = [
+  '',
+  'BED',
+  'HED',
+  'FACULTY',
+  'NTP'
+];
 
-        function RegistrationForm({ onClose, onOpenLogin }) {
+function RegistrationForm({ onClose, onOpenLogin }) {
           const [departmentSelected, setDepartmentSelected] = useState('');
   const [subSelected, setSubSelected] = useState('');
 
@@ -23,6 +23,14 @@
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const formatApiError = (err) => {
+    if (!err) return '';
+    if (typeof err === 'string') return err;
+    if (Array.isArray(err)) return err.map(item => item?.msg || item?.detail || JSON.stringify(item)).join('; ');
+    if (typeof err === 'object') return err.detail ? formatApiError(err.detail) : err.msg || JSON.stringify(err);
+    return String(err);
+  };
 
   function validate() {
     setError('');
@@ -43,14 +51,14 @@
     setLoading(true);
     try {
       const body = { fullname, email, id_number: idNumber, department: departmentSelected, sub: subSelected, password };
-      const res = await fetch('https://backend-58cw.onrender.com/auth/register', {
+      const res = await fetch(`${API_BASE_URL}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.detail || 'Registration failed');
+        setError(formatApiError(data.detail || data) || 'Registration failed');
         setLoading(false);
         return;
       }

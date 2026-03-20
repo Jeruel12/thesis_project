@@ -1,5 +1,5 @@
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine, Base
@@ -11,6 +11,7 @@ from reservations import router as reservations_router
 from notifications import router as notifications_router
 from equipment_returns import router as equipment_returns_router
 from analytics import router as analytics_router
+from realtime import manager
 
 app = FastAPI()
 
@@ -50,6 +51,45 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    token = ws.query_params.get("token")
+    if not token:
+        await ws.close(code=1008)
+        return
+
+    try:
+        from utils import decode_access_token
+        from models import User
+
+        user_id = decode_access_token(token)
+        if not user_id:
+            await ws.close(code=1008)
+            return
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == int(user_id)).first()
+            is_admin = bool(user and (getattr(user, "role", "") or "").lower() == "admin")
+        finally:
+            db.close()
+
+        await manager.connect(ws, user_id=int(user_id), is_admin=is_admin)
+        await ws.send_json({"type": "connected", "user_id": int(user_id), "is_admin": is_admin})
+
+        while True:
+            # Keep connection alive; client doesn't need to send messages
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(ws)
+    except Exception:
+        manager.disconnect(ws)
+        try:
+            await ws.close(code=1011)
+        except Exception:
+            pass
 
 @app.get("/")
 def read_root():

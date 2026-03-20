@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import '../styles/UserDashboard.css';
+import { API_BASE_URL, WS_BASE_URL } from '../config';
 
 function UserDashboard({ onLogout }) {
   // Function to map equipment names to their categories
@@ -113,15 +114,34 @@ function UserDashboard({ onLogout }) {
   });
   const [notifications, setNotifications] = useState([]);
 
+  // Ref for auto-scrolling chat messages to bottom
+  const chatMessagesEndRef = useRef(null);
+
   // Helper functions for equipment status
+  const normalizeStatusLabel = (status) => {
+    if (!status && status !== 0) return '';
+    const text = String(status).trim();
+    if (!text) return '';
+    return text
+      .split(' ')
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+      .join(' ');
+  };
+
   const getEquipmentStatusLabel = (equipment) => {
-    if (equipment && equipment.status) return equipment.status;
+    if (equipment && equipment.status) {
+      return normalizeStatusLabel(equipment.status);
+    }
     return equipment && equipment.available ? 'Available' : 'Not Available';
   };
 
   const getEquipmentStatusClass = (label) => {
-    const key = label.toLowerCase().replace(/ /g, '-');
-    return key; // returns: 'available', 'not-available', 'under-maintenance', 'for-repair'
+    const key = normalizeStatusLabel(label || '')
+      .toLowerCase()
+      .replace(/ /g, '-');
+    // Ensure we return a known class option to match CSS.
+    const allowed = ['available', 'not-available', 'under-maintenance', 'for-repair'];
+    return allowed.includes(key) ? key : 'not-available';
   };
 
   const isEquipmentAvailable = (equipment) => {
@@ -136,7 +156,7 @@ function UserDashboard({ onLogout }) {
     // Fetch user account information from backend
     const userId = localStorage.getItem('user_id');
     if (userId) {
-      fetch(`https://backend-58cw.onrender.com/auth/user/${userId}`, {
+      fetch(`${API_BASE_URL}/auth/user/${userId}`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -174,11 +194,21 @@ function UserDashboard({ onLogout }) {
   const refreshReservations = async () => {
     try {
       const userId = localStorage.getItem('user_id');
-      const res = await fetch(`https://backend-58cw.onrender.com/reservations/?user_id=${userId}`, {
+      const res = await fetch(`${API_BASE_URL}/reservations/?user_id=${userId}`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
       });
       if (res.ok) {
         const data = await res.json();
+        const normalizeStatus = (s) => {
+          const v = (s ?? '').toString().trim().toLowerCase();
+          if (!v) return s;
+          if (v === 'pending') return 'Pending';
+          if (v === 'approved' || v === 'confirmed') return 'Approved';
+          if (v === 'denied' || v === 'rejected') return 'Denied';
+          if (v === 'cancelled' || v === 'canceled') return 'Cancelled';
+          if (v === 'returned') return 'Returned';
+          return v.charAt(0).toUpperCase() + v.slice(1);
+        };
         // normalize to camelCase and compute itemName
         const normalize = (r) => {
           const out = {
@@ -188,7 +218,8 @@ function UserDashboard({ onLogout }) {
             dateNeeded: r.date_needed,
             timeFrom: r.time_from,
             timeTo: r.time_to,
-            timeNeeded: r.time_from || r.time_to || r.time_needed
+            timeNeeded: r.time_from || r.time_to || r.time_needed,
+            status: normalizeStatus(r.status)
           };
           if (r.item_type === 'equipment') {
             const eq = equipmentList.find(e => e.id === r.item_id);
@@ -208,7 +239,7 @@ function UserDashboard({ onLogout }) {
       }
       
       // Also refresh equipment list from backend to get real availability status
-      const equipRes = await fetch('https://backend-58cw.onrender.com/equipment/', {
+      const equipRes = await fetch(`${API_BASE_URL}/equipment/`, {
         headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
       });
       if (equipRes.ok) {
@@ -228,7 +259,7 @@ function UserDashboard({ onLogout }) {
         setNotifications([]);
         return;
       }
-      const res = await fetch('https://backend-58cw.onrender.com/notifications/', {
+      const res = await fetch(`${API_BASE_URL}/notifications/`, {
         headers: { 'Authorization': `Bearer ${access_token}` }
       });
       if (res.ok) {
@@ -247,7 +278,7 @@ function UserDashboard({ onLogout }) {
   useEffect(() => {
     const fetchEquipment = async () => {
       try {
-        const res = await fetch('https://backend-58cw.onrender.com/equipment/', {
+        const res = await fetch(`${API_BASE_URL}/equipment/`, {
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           }
@@ -262,7 +293,7 @@ function UserDashboard({ onLogout }) {
     };
     const fetchRooms = async () => {
       try {
-        const res = await fetch('https://backend-58cw.onrender.com/rooms/', {
+        const res = await fetch(`${API_BASE_URL}/rooms/`, {
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
           }
@@ -285,6 +316,177 @@ function UserDashboard({ onLogout }) {
       await refreshReservations();
       await fetchNotifications();
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Realtime updates (WebSocket): refresh reservations/notifications when events happen
+  useEffect(() => {
+    const token = localStorage.getItem('access_token');
+    if (!token) return;
+
+    let ws = null;
+    let pingTimer = null;
+    let reconnectTimeout = null;
+    let isManuallyClosing = false;
+
+    const normalizeStatus = (s) => {
+      const v = (s ?? '').toString().trim().toLowerCase();
+      if (!v) return s;
+      if (v === 'pending') return 'Pending';
+      if (v === 'approved' || v === 'confirmed') return 'Approved';
+      if (v === 'denied' || v === 'rejected') return 'Denied';
+      if (v === 'cancelled' || v === 'canceled') return 'Cancelled';
+      if (v === 'returned') return 'Returned';
+      return v.charAt(0).toUpperCase() + v.slice(1);
+    };
+
+    const connectWebSocket = () => {
+      try {
+        ws = new WebSocket(`${WS_BASE_URL}/ws?token=${encodeURIComponent(token)}`);
+
+        ws.onopen = () => {
+          console.log('[WebSocket] Connected');
+          // Keep-alive: prevents idle timeouts; backend is waiting on receive_text()
+          pingTimer = window.setInterval(() => {
+            try {
+              if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
+            } catch (e) {
+              // ignore
+            }
+          }, 25000);
+        };
+
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            const t = msg && msg.type;
+            if (!t || t === 'connected') return;
+
+            // Apply reservation status updates immediately (then sync by refetch)
+            if (t === 'reservation.updated' && msg && msg.reservation_id) {
+              const newStatus = normalizeStatus(msg.status);
+              if (msg.item_type === 'equipment') {
+                setEquipmentReservations(prev => prev.map(r => (r.id === msg.reservation_id ? { ...r, status: newStatus } : r)));
+              } else if (msg.item_type === 'room') {
+                setRoomReservations(prev => prev.map(r => (r.id === msg.reservation_id ? { ...r, status: newStatus } : r)));
+              }
+            }
+
+            if (t.startsWith('reservation.') || t.startsWith('notification.') || t.startsWith('equipment_return.')) {
+              refreshReservations();
+              fetchNotifications();
+            }
+
+            // Refresh room list when any room event occurs
+            if (t.startsWith('room.')) {
+              // Fetch updated room list
+              fetch(`${API_BASE_URL}/rooms/`, {
+                headers: {
+                  'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                }
+              })
+              .then(res => res.ok && res.json())
+              .then(data => data && setRoomList(data))
+              .catch(err => console.error('Failed to fetch rooms:', err));
+            }
+
+            // Refresh equipment list when any equipment event occurs
+            if (t.startsWith('equipment.')) {
+              // Fetch updated equipment list
+              fetch(`${API_BASE_URL}/equipment/`, {
+                headers: {
+                  'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                }
+              })
+              .then(res => res.ok && res.json())
+              .then(data => data && setEquipmentList(data))
+              .catch(err => console.error('Failed to fetch equipment:', err));
+            }
+          } catch (e) {
+            // ignore malformed messages
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error('[WebSocket] Error:', error);
+        };
+
+        ws.onclose = () => {
+          console.log('[WebSocket] Disconnected');
+          if (pingTimer) window.clearInterval(pingTimer);
+          
+          // Auto-reconnect after 5 seconds unless manually closing
+          if (!isManuallyClosing) {
+            reconnectTimeout = window.setTimeout(() => {
+              console.log('[WebSocket] Attempting to reconnect...');
+              connectWebSocket();
+            }, 5000);
+          }
+        };
+      } catch (e) {
+        console.error('[WebSocket] Connection error:', e);
+      }
+    };
+
+    // Initial connection
+    connectWebSocket();
+
+    return () => {
+      isManuallyClosing = true;
+      try {
+        if (pingTimer) window.clearInterval(pingTimer);
+      } catch (e) {
+        // ignore
+      }
+      try {
+        if (reconnectTimeout) window.clearTimeout(reconnectTimeout);
+      } catch (e) {
+        // ignore
+      }
+      try {
+        if (ws) ws.close();
+      } catch (e) {
+        // ignore
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Real-time polling: Periodically refresh reservations and notifications
+  // This ensures updates even if WebSocket disconnects
+  useEffect(() => {
+    // Poll every 1 second for new reservations and notifications
+    const pollInterval = window.setInterval(async () => {
+      try {
+        await refreshReservations();
+        await fetchNotifications();
+        // Also fetch rooms and equipment to check for availability changes
+        const roomRes = await fetch(`${API_BASE_URL}/rooms/`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+          }
+        });
+        if (roomRes.ok) {
+          const data = await roomRes.json();
+          setRoomList(data);
+        }
+        const equipRes = await fetch(`${API_BASE_URL}/equipment/`, {
+          headers: {
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+          }
+        });
+        if (equipRes.ok) {
+          const data = await equipRes.json();
+          setEquipmentList(data);
+        }
+      } catch (err) {
+        console.error('Error during polling update:', err);
+      }
+    }, 1000); // 1 second
+
+    return () => {
+      if (pollInterval) window.clearInterval(pollInterval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -339,6 +541,15 @@ function UserDashboard({ onLogout }) {
       document.removeEventListener('click', handleClickOutside);
     };
   }, [showProfileMenu, showChatbot, showNotificationsMenu]);
+
+  // Auto-scroll chat messages to bottom when new messages arrive
+  useEffect(() => {
+    if (chatMessagesEndRef.current) {
+      setTimeout(() => {
+        chatMessagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      }, 100);
+    }
+  }, [chatMessages]);
 
   // Smooth scroll to top when switching tabs (without jerky movement)
   useEffect(() => {
@@ -465,7 +676,7 @@ function UserDashboard({ onLogout }) {
 
   const deleteNotification = async (notifId) => {
     try {
-      await fetch(`https://backend-58cw.onrender.com/notifications/${notifId}`, {
+      await fetch(`${API_BASE_URL}/notifications/${notifId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
       });
@@ -480,7 +691,7 @@ function UserDashboard({ onLogout }) {
   const deleteAllNotifications = async () => {
     try {
       for (const notif of notifications) {
-        await fetch(`https://backend-58cw.onrender.com/notifications/${notif.id}`, {
+        await fetch(`${API_BASE_URL}/notifications/${notif.id}`, {
           method: 'DELETE',
           headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
         });
@@ -515,7 +726,7 @@ function UserDashboard({ onLogout }) {
 
   const handleSaveAccount = () => {
     const userId = localStorage.getItem('user_id');
-    fetch(`https://backend-58cw.onrender.com/auth/user/${userId}`, {
+    fetch(`${API_BASE_URL}/auth/user/${userId}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -588,6 +799,13 @@ function UserDashboard({ onLogout }) {
       return;
     }
 
+    // Check if reservation is during lunch time (12:00 PM - 12:59 PM)
+    const [hours] = reservationData.timeNeeded.split(':').map(Number);
+    if (hours === 12) {
+      setEquipmentReservationError('Equipment cannot be reserved during lunch time (12:00 PM - 1:00 PM). Please choose a different time.');
+      return;
+    }
+
     // Persist each equipment reservation to backend
     const payloads = selectedEquipmentsList.map(equipmentId => {
       return {
@@ -603,7 +821,7 @@ function UserDashboard({ onLogout }) {
     try {
       const created = [];
       for (let p of payloads) {
-        const res = await fetch('https://backend-58cw.onrender.com/reservations/', {
+        const res = await fetch(`${API_BASE_URL}/reservations/`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -680,7 +898,7 @@ function UserDashboard({ onLogout }) {
     setLoadingAvailability(true);
     try {
       const res = await fetch(
-        `https://backend-58cw.onrender.com/reservations/availability/${roomId}/${dateNeeded}`,
+        `${API_BASE_URL}/reservations/availability/${roomId}/${dateNeeded}`,
         {
           method: 'GET',
           headers: {
@@ -802,7 +1020,7 @@ function UserDashboard({ onLogout }) {
           time_to: timeTo,
           purpose: purpose
         };
-        const res = await fetch('https://backend-58cw.onrender.com/reservations/', {
+        const res = await fetch(`${API_BASE_URL}/reservations/`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -973,7 +1191,7 @@ function UserDashboard({ onLogout }) {
       };
 
       // persist edit to backend
-      fetch(`https://backend-58cw.onrender.com/reservations/${activeReservation.id}`, {
+      fetch(`${API_BASE_URL}/reservations/${activeReservation.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1042,7 +1260,7 @@ function UserDashboard({ onLogout }) {
       };
 
       // persist edit
-      fetch(`https://backend-58cw.onrender.com/reservations/${activeReservation.id}`, {
+      fetch(`${API_BASE_URL}/reservations/${activeReservation.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1076,7 +1294,7 @@ function UserDashboard({ onLogout }) {
     
     const performDelete = async () => {
       try {
-        const res = await fetch(`https://backend-58cw.onrender.com/reservations/${activeReservation.id}`, {
+        const res = await fetch(`${API_BASE_URL}/reservations/${activeReservation.id}`, {
           method: 'DELETE',
           headers: {
             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -1142,7 +1360,7 @@ function UserDashboard({ onLogout }) {
     
     // Merge with existing reservation context if we're collecting information
     // Use context values if current detection didn't find them
-    let useContext = reservationContext.isActive;
+    // let useContext = reservationContext.isActive; // Removed unused variable
     
     // Equipment detection - more flexible matching (supports multiple equipment)
     const equipmentTypes = {
@@ -1163,8 +1381,8 @@ function UserDashboard({ onLogout }) {
     let detectedEquipmentFromDBList = [];
     
     // Check for patterns like "1 speaker at 1 microphone" or "speaker and microphone"
-    const connectors = ['at', 'and', '&', 'at', 'saka', 'tsaka'];
-    const equipmentPatterns = [];
+    // const connectors = ['at', 'and', '&', 'at', 'saka', 'tsaka']; // Removed unused variable
+    // const equipmentPatterns = []; // Removed unused variable
     
     // First, try to find equipment by keywords with quantity detection
     // Structure: { type: 'MICROPHONE', quantity: 2 }
@@ -1416,7 +1634,7 @@ function UserDashboard({ onLogout }) {
       // Still check for slash format dates even if month name was found (in case user uses both)
       if (!detectedDate) {
         // Pattern: "3/16" or "03/16/2026" or "3-16"
-        const slashDateMatch = input.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
+        const slashDateMatch = input.match(/(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?/);
         if (slashDateMatch) {
           let month = parseInt(slashDateMatch[1]);
           let day = parseInt(slashDateMatch[2]);
@@ -1464,7 +1682,7 @@ function UserDashboard({ onLogout }) {
         /\s+(\d{1,2})\s*(am|pm)\b/i,
         /\s+(\d{1,2}):(\d{2})\s*(am|pm)?\b/i,
         /\s+(march|april|may|june|july|august|september|october|november|december|january|february)\s+/i,
-        /\s+(\d{1,2})[\/\-](\d{1,2})/i
+        /\s+(\d{1,2})[/-](\d{1,2})/i
       ];
       
       let endIndex = input.length;
@@ -1606,9 +1824,8 @@ function UserDashboard({ onLogout }) {
     // Ask for missing information one at a time, prioritizing
     if (!detectedDate) {
       setReservationContext(updatedContext);
-      const itemInfo = hasEquipment ? 'equipment' : (hasRoom ? `room ${detectedRoom?.room_number || ''}` : 'item');
       return {
-        response: `What date would you like to reserve the ${itemInfo}?\n\nYou can say:\n• Today\n• Tomorrow\n• A specific date (e.g., March 18, March 20)`,
+        response: `What date would you like to reserve the item?\n\nYou can say:\n• Today\n• Tomorrow\n• A specific date (e.g., March 18, March 20)`,
         suggestions: ['Today', 'Tomorrow', 'March 18', 'March 20'],
         created: false
       };
@@ -1616,7 +1833,6 @@ function UserDashboard({ onLogout }) {
     
     if (!detectedTime) {
       setReservationContext(updatedContext);
-      const itemInfo = hasEquipment ? 'equipment' : (hasRoom ? `room ${detectedRoom?.room_number || ''}` : 'item');
       const dateInfo = formatDate(detectedDate);
       return {
         response: `What time would you like the reservation on ${dateInfo}?\n\nYou can say:\n• 9am, 2pm, 3:30pm\n• Or any time format`,
@@ -1624,7 +1840,7 @@ function UserDashboard({ onLogout }) {
         created: false
       };
     }
-    
+
     // If purpose is missing, ask for it (but make it optional with a default)
     if (!detectedPurpose) {
       // Check if user wants to skip purpose
@@ -1632,11 +1848,10 @@ function UserDashboard({ onLogout }) {
         detectedPurpose = 'As requested';
       } else {
         setReservationContext(updatedContext);
-        const itemInfo = hasEquipment ? 'equipment' : (hasRoom ? `room ${detectedRoom?.room_number || ''}` : 'item');
         const dateInfo = formatDate(detectedDate);
         const timeInfo = formatTime(detectedTime);
         return {
-          response: `What's the purpose of this reservation?\n\n📋 Reservation Summary:\n   Item: ${itemInfo}\n   Date: ${dateInfo}\n   Time: ${timeInfo}\n\nYou can say:\n• Training, Meeting, Presentation\n• Or say "Skip" to use default`,
+          response: `What's the purpose of this reservation?\n\n📋 Reservation Summary:\n   Date: ${dateInfo}\n   Time: ${timeInfo}\n\nYou can say:\n• Training, Meeting, Presentation\n• Or say "Skip" to use default`,
           suggestions: ['Training', 'Meeting', 'Presentation', 'Skip'],
           created: false
         };
@@ -1795,7 +2010,7 @@ function UserDashboard({ onLogout }) {
           console.log('[CHAT] Creating equipment reservation:', reservationData, 'Equipment:', equipment);
 
           try {
-            const response = await fetch('https://backend-58cw.onrender.com/reservations/', {
+            const response = await fetch(`${API_BASE_URL}/reservations/`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -1824,7 +2039,7 @@ function UserDashboard({ onLogout }) {
         
         // Also refresh equipment list to update availability status
         try {
-          const equipRes = await fetch('https://backend-58cw.onrender.com/equipment/', {
+          const equipRes = await fetch(`${API_BASE_URL}/equipment/`, {
             headers: { 'Authorization': `Bearer ${localStorage.getItem('access_token')}` }
           });
           if (equipRes.ok) {
@@ -1875,7 +2090,7 @@ function UserDashboard({ onLogout }) {
 
         console.log('[CHAT] Creating room reservation:', reservationData);
 
-        const response = await fetch('https://backend-58cw.onrender.com/room-reservations/', {
+        const response = await fetch(`${API_BASE_URL}/room-reservations/`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1985,7 +2200,7 @@ function UserDashboard({ onLogout }) {
           }
           setChatContext({ ...chatContext, searchedItem: detectedItem, lastReserved: 'equipment' });
         } else if (input.includes('room') || input.includes('213') || input.includes('214') || input.includes('215')) {
-          const roomPattern = input.match(/\d{3}[a-z]?/i);
+          // const roomPattern = input.match(/\d{3}[a-z]?/i); // Removed unused variable
           const availableRooms = roomList.filter(r => r.available === true);
           
           if (availableRooms.length > 0) {
@@ -2207,9 +2422,9 @@ function UserDashboard({ onLogout }) {
                       }
                     } else if (reservation.item_type === 'room') {
                       // For rooms, use the room name
-                      const roomId = reservation.equipmentId || reservation.item_id || reservation.itemId;
+                      const roomId = reservation.equipmentId || reservation.item_id || reservation.itemId || reservation.itemId;
                       if (roomId && roomList && roomList.length > 0) {
-                        const foundRoom = roomList.find(r => String(r.id) === String(roomId));
+                        const foundRoom = roomList.find(r => String(r.id) === String(roomId) || String(r.id) === String(Number(roomId)));
                         if (foundRoom) {
                           // Ensure format is "Room XXX"
                           const roomName = foundRoom.name;
@@ -2468,20 +2683,22 @@ function UserDashboard({ onLogout }) {
                             const isApproved = status === 'approved' || status === 'confirmed';
                             if (!isApproved) {
                               return (
-                                <button className="action-btn edit-btn" title="Edit" onClick={() => handleEditReservation(reservation)}>
-                                  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
-                                    <path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 000-1.42l-2.34-2.34a1.003 1.003 0 00-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z" />
-                                  </svg>
-                                </button>
+                                <>
+                                  <button className="action-btn edit-btn" title="Edit" onClick={() => handleEditReservation(reservation)}>
+                                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+                                      <path fill="currentColor" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1.003 1.003 0 000-1.42l-2.34-2.34a1.003 1.003 0 00-1.42 0l-1.83 1.83 3.75 3.75 1.84-1.82z" />
+                                    </svg>
+                                  </button>
+                                  <button className="action-btn delete-btn" title="Delete" onClick={() => handleDeleteClick(reservation)}>
+                                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+                                      <path fill="currentColor" d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
+                                    </svg>
+                                  </button>
+                                </>
                               );
                             }
                             return null;
                           })()}
-                          <button className="action-btn delete-btn" title="Delete" onClick={() => handleDeleteClick(reservation)}>
-                            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
-                              <path fill="currentColor" d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" />
-                            </svg>
-                          </button>
                         </td>
                       </tr>
                     );
@@ -3014,6 +3231,26 @@ function UserDashboard({ onLogout }) {
         <div className="reservation-modal-bg">
           <div className="reservation-modal">
             <h2 className="reservation-modal-title">Equipment Reservation Form</h2>
+            <div style={{
+              backgroundColor: '#fce4ec',
+              border: '1px solid #f8bbd0',
+              borderRadius: '6px',
+              padding: '12px',
+              marginBottom: '16px',
+              display: 'flex',
+              gap: '10px',
+              alignItems: 'flex-start'
+            }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{flexShrink: 0, marginTop: '2px'}}>
+                <circle cx="12" cy="12" r="10" stroke="#c2185b" strokeWidth="2"/>
+                <path d="M12 7v5" stroke="#c2185b" strokeWidth="2" strokeLinecap="round"/>
+                <circle cx="12" cy="17" r="1" fill="#c2185b"/>
+              </svg>
+              <div style={{fontSize: '0.9rem', color: '#880e4f', lineHeight: '1.5'}}>
+                <strong>Equipment reservation must be between 7:30 AM and 5:00 PM on weekdays (Monday-Friday).</strong>
+                <div style={{marginTop: '4px'}}>⏸️ Lunch time (12:00 PM - 1:00 PM) is not available for reservations.</div>
+              </div>
+            </div>
             {equipmentReservationError && (
               <div className="reservation-error-message">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -3234,6 +3471,26 @@ function UserDashboard({ onLogout }) {
         <div className="reservation-modal-bg">
           <div className="reservation-modal">
             <h2 className="reservation-modal-title">Room Reservation Form</h2>
+            <div style={{
+              backgroundColor: '#fce4ec',
+              border: '1px solid #f8bbd0',
+              borderRadius: '6px',
+              padding: '12px',
+              marginBottom: '16px',
+              display: 'flex',
+              gap: '10px',
+              alignItems: 'flex-start'
+            }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{flexShrink: 0, marginTop: '2px'}}>
+                <circle cx="12" cy="12" r="10" stroke="#c2185b" strokeWidth="2"/>
+                <path d="M12 7v5" stroke="#c2185b" strokeWidth="2" strokeLinecap="round"/>
+                <circle cx="12" cy="17" r="1" fill="#c2185b"/>
+              </svg>
+              <div style={{fontSize: '0.9rem', color: '#880e4f', lineHeight: '1.5'}}>
+                <strong>Room reservation must be between 7:30 AM and 5:00 PM on weekdays (Monday-Friday).</strong>
+                <div style={{marginTop: '4px'}}>⏸️ Lunch time (12:00 PM - 1:00 PM) is not available for reservations.</div>
+              </div>
+            </div>
             {roomReservationError && (
               <div className="reservation-error-message">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -3446,6 +3703,7 @@ function UserDashboard({ onLogout }) {
                   )}
                 </div>
               ))}
+              <div ref={chatMessagesEndRef} />
             </div>
             
             <div className="chatbot-input-area">

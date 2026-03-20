@@ -6,6 +6,7 @@ from models import Reservation, Room, User, Equipment, EquipmentReservation, Roo
 from schemas import ReservationCreate, ReservationOut, ReservationUpdate
 from typing import List, Optional
 from utils import decode_access_token
+from realtime import emit_from_sync
 
 router = APIRouter(prefix="/reservations", tags=["reservations"])
 
@@ -85,6 +86,16 @@ def create_reservation(res: ReservationCreate, db: Session = Depends(get_db), us
         db.commit()
         db.refresh(db_res)
         db.refresh(db_res, ['user'])
+        emit_from_sync(
+            {
+                "type": "reservation.created",
+                "item_type": "equipment",
+                "reservation_id": db_res.id,
+                "user_id": db_res.user_id,
+                "status": db_res.status,
+            },
+            user_id=db_res.user_id,
+        )
         # return a unified shape compatible with ReservationOut
         return {
             'id': db_res.id,
@@ -130,6 +141,16 @@ def create_reservation(res: ReservationCreate, db: Session = Depends(get_db), us
         db.commit()
         db.refresh(db_res)
         db.refresh(db_res, ['user'])
+        emit_from_sync(
+            {
+                "type": "reservation.created",
+                "item_type": "room",
+                "reservation_id": db_res.id,
+                "user_id": db_res.user_id,
+                "status": db_res.status,
+            },
+            user_id=db_res.user_id,
+        )
         return {
             'id': db_res.id,
             'item_type': 'room',
@@ -250,6 +271,16 @@ def update_reservation(res_id: int, res: ReservationUpdate, db: Session = Depend
                 db_res.approved_at = func.now()
     db.commit()
     db.refresh(db_res, ['user'])
+    emit_from_sync(
+        {
+            "type": "reservation.updated",
+            "item_type": "equipment" if model_type == "equipment" else "room",
+            "reservation_id": db_res.id,
+            "user_id": db_res.user_id,
+            "status": db_res.status,
+        },
+        user_id=db_res.user_id,
+    )
     # return unified shape
     return {
         'id': db_res.id,
@@ -283,6 +314,8 @@ def delete_reservation(res_id: int, db: Session = Depends(get_db), user_id: Opti
     is_admin = requesting_user and (getattr(requesting_user, 'role', '') or '').lower() == 'admin'
     if not user_id or (db_res.user_id != user_id and not is_admin):
         raise HTTPException(status_code=403, detail="Not authorized to delete this reservation")
+    deleted_user_id = db_res.user_id
+    deleted_item_type = "equipment" if model_type == "equipment" else "room"
     db.delete(db_res)
     # if this was an equipment reservation, mark the equipment available again
     if model_type == 'equipment':
@@ -295,6 +328,15 @@ def delete_reservation(res_id: int, db: Session = Depends(get_db), user_id: Opti
         except Exception:
             pass
     db.commit()
+    emit_from_sync(
+        {
+            "type": "reservation.deleted",
+            "item_type": deleted_item_type,
+            "reservation_id": res_id,
+            "user_id": deleted_user_id,
+        },
+        user_id=deleted_user_id,
+    )
     return {"message": "Reservation deleted"}
 
 

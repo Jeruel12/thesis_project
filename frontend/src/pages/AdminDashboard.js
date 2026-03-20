@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import '../styles/AdminDashboard.css';
+import '../styles/RegistrationForm.css';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell } from 'recharts';
+import { API_BASE_URL, WS_BASE_URL } from '../config';
 
 // Predefined item names
 const ITEM_NAMES = [
@@ -28,6 +30,54 @@ const getEquipmentCategory = (name) => {
   return categoryMap[name] || name.toUpperCase();
 };
 
+const formatApiError = (error) => {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  if (Array.isArray(error)) {
+    return error
+      .map(item => {
+        if (typeof item === 'string') return item;
+        if (!item) return '';
+        if (item.msg) return item.msg;
+        if (item.detail) return formatApiError(item.detail);
+        return JSON.stringify(item);
+      })
+      .filter(Boolean)
+      .join('; ');
+  }
+  if (typeof error === 'object') {
+    if (error.detail) return formatApiError(error.detail);
+    if (error.msg) return error.msg;
+    return Object.values(error)
+      .map(value => formatApiError(value))
+      .filter(Boolean)
+      .join('; ');
+  }
+  return String(error);
+};
+
+const formatTime12Hour = (time24) => {
+  if (!time24) return '';
+  // Handle time range format: "14:00 - 15:00"
+  if (time24.includes(' - ')) {
+    const [startTime, endTime] = time24.split(' - ');
+    return `${formatSingleTime(startTime.trim())} - ${formatSingleTime(endTime.trim())}`;
+  }
+  // Single time format: "14:00"
+  return formatSingleTime(time24);
+};
+
+const formatSingleTime = (time24) => {
+  if (!time24) return '';
+  // time24 format: "14:00" or "14:00:00" or "14" or "15"
+  const parts = time24.split(':');
+  const hour = parseInt(parts[0], 10);
+  const minutes = parts[1] ? parts[1] : '00';
+  const meridiem = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${minutes} ${meridiem}`;
+};
+
 const EQUIPMENT_STATUS_OPTIONS = [
   'Available',
   'Not Available',
@@ -43,7 +93,40 @@ function AdminDashboard({ onLogout }) {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [users, setUsers] = useState([]);
   const [userDepartmentTab, setUserDepartmentTab] = useState('ALL');
+  const [userSearchTerm, setUserSearchTerm] = useState('');
+  // user management state
+  const [showEditUserModal, setShowEditUserModal] = useState(false);
+  const [editUserError, setEditUserError] = useState('');
+  const [editUserData, setEditUserData] = useState({
+    id: null,
+    fullname: '',
+    email: '',
+    id_number: '',
+    department: '',
+    sub: ''
+  });
+  const [showDeleteUserModal, setShowDeleteUserModal] = useState(false);
+  const [deleteUserId, setDeleteUserId] = useState(null);
+  const [deleteUserName, setDeleteUserName] = useState('');
+  const [deleteUserError, setDeleteUserError] = useState('');
+  const [userSuccessMsg, setUserSuccessMsg] = useState('');
+  const [showAddUserModal, setShowAddUserModal] = useState(false);
+  const [addUserError, setAddUserError] = useState('');
+  const [addUserSuccess, setAddUserSuccess] = useState(false);
+  const [addUserData, setAddUserData] = useState({
+    fullname: '',
+    email: '',
+    id_number: '',
+    department: '',
+    sub: '',
+    password: '',
+    confirmPassword: ''
+  });
   const [equipment, setEquipment] = useState([]);
+  const [equipmentFilter, setEquipmentFilter] = useState('');
+  const equipmentTypes = useMemo(() => {
+    return Array.from(new Set(equipment.map(e => e.name).filter(Boolean))).sort();
+  }, [equipment]);
   const [dynamicItemNames, setDynamicItemNames] = useState([]);
   const [showAddEquipmentModal, setShowAddEquipmentModal] = useState(false);
   const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
@@ -89,6 +172,7 @@ function AdminDashboard({ onLogout }) {
     imagePreview: null
   });
   const [addRoomSuccess, setAddRoomSuccess] = useState(false);
+  const [updateRoomSuccess, setUpdateRoomSuccess] = useState(false);
   const [addEquipmentSuccess, setAddEquipmentSuccess] = useState(false);
   const [updateEquipmentSuccess, setUpdateEquipmentSuccess] = useState(false);
   const [stats, setStats] = useState({
@@ -127,6 +211,7 @@ function AdminDashboard({ onLogout }) {
   const [returnCondition, setReturnCondition] = useState('good');
   const [returnRemarks, setReturnRemarks] = useState('');
   const [returnSuccessMessage, setReturnSuccessMessage] = useState('');
+  const [returnLoading, setReturnLoading] = useState(false);
   const [recentReturns, setRecentReturns] = useState(() => {
     const saved = localStorage.getItem('recentReturns');
     return saved ? JSON.parse(saved) : [];
@@ -135,9 +220,11 @@ function AdminDashboard({ onLogout }) {
   // Inventory management state
   const [inventorySearchTerm, setInventorySearchTerm] = useState('');
   const [inventoryStatusFilter, setInventoryStatusFilter] = useState('All');
+  const [inventoryEquipmentNameFilter, setInventoryEquipmentNameFilter] = useState('All');
   const [selectedInventoryItems, setSelectedInventoryItems] = useState(new Set());
   const [showBulkStatusModal, setShowBulkStatusModal] = useState(false);
   const [bulkStatusValue, setBulkStatusValue] = useState('Available');
+  const [showInventoryTable, setShowInventoryTable] = useState(false);
 
   // Recent Returns search and filter state
   const [returnsSearchTerm, setReturnsSearchTerm] = useState('');
@@ -186,7 +273,7 @@ function AdminDashboard({ onLogout }) {
       const token = localStorage.getItem('access_token');
       
       // Fetch peak usage data
-      const peakRes = await fetch('https://backend-58cw.onrender.com/analytics/peak-usage', {
+      const peakRes = await fetch(`${API_BASE_URL}/analytics/peak-usage`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (peakRes.ok) {
@@ -194,7 +281,7 @@ function AdminDashboard({ onLogout }) {
       }
 
       // Fetch demand forecast
-      const forecastRes = await fetch('https://backend-58cw.onrender.com/analytics/demand-forecast', {
+      const forecastRes = await fetch(`${API_BASE_URL}/analytics/demand-forecast`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (forecastRes.ok) {
@@ -202,7 +289,7 @@ function AdminDashboard({ onLogout }) {
       }
 
       // Fetch equipment health data
-      const healthRes = await fetch('https://backend-58cw.onrender.com/analytics/equipment-health', {
+      const healthRes = await fetch(`${API_BASE_URL}/analytics/equipment-health`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (healthRes.ok) {
@@ -210,7 +297,7 @@ function AdminDashboard({ onLogout }) {
       }
 
       // Fetch recommendations
-      const recsRes = await fetch('https://backend-58cw.onrender.com/analytics/recommendations', {
+      const recsRes = await fetch(`${API_BASE_URL}/analytics/recommendations`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (recsRes.ok) {
@@ -223,7 +310,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch('https://backend-58cw.onrender.com/auth/stats', {
+      const res = await fetch(`${API_BASE_URL}/auth/stats`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -239,7 +326,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchUsers = useCallback(async () => {
     try {
-      const res = await fetch('https://backend-58cw.onrender.com/auth/users', {
+      const res = await fetch(`${API_BASE_URL}/auth/users`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -258,9 +345,210 @@ function AdminDashboard({ onLogout }) {
     }
   }, []);
 
-  const filteredUsers = userDepartmentTab === 'ALL' 
+  const filteredUsers = (userDepartmentTab === 'ALL' 
     ? users 
-    : users.filter(user => user.department === userDepartmentTab);
+    : users.filter(user => user.department === userDepartmentTab)).filter(user => {
+    const searchLower = userSearchTerm.toLowerCase();
+    return (
+      user.fullname?.toLowerCase().includes(searchLower) ||
+      user.email?.toLowerCase().includes(searchLower) ||
+      user.id_number?.toLowerCase().includes(searchLower) ||
+      user.department?.toLowerCase().includes(searchLower)
+    );
+  });
+
+  const handleEditUser = (user) => {
+    setEditUserError('');
+    setEditUserData({
+      id: user.id,
+      fullname: user.fullname || '',
+      email: user.email || '',
+      id_number: user.id_number || '',
+      department: user.department || '',
+      sub: user.sub || ''
+    });
+    setShowEditUserModal(true);
+  };
+
+  const handleSaveEditUser = async () => {
+    if (!editUserData.id) return;
+
+    const fullname = (editUserData.fullname || '').trim();
+    const email = (editUserData.email || '').trim();
+    const idNumber = (editUserData.id_number || '').trim();
+    const department = (editUserData.department || '').trim();
+    const sub = (editUserData.sub || '').trim();
+
+    if (!fullname || !email || !idNumber || !department) {
+      setEditUserError('Please fill in Full Name, Email, ID Number, and Department.');
+      return;
+    }
+
+    setEditUserError('');
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/user/${editUserData.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+        },
+        body: JSON.stringify({
+          fullname,
+          email,
+          id_number: idNumber,
+          department,
+          sub
+        })
+      });
+
+      if (res.ok) {
+        setShowEditUserModal(false);
+        setEditUserError('');
+        setUserSuccessMsg('User updated successfully!');
+        setTimeout(() => setUserSuccessMsg(''), 3500);
+        await fetchUsers();
+      } else {
+        const errText = await res.text();
+        setEditUserError(errText || 'Failed to update user');
+      }
+    } catch (err) {
+      console.error('Error updating user:', err);
+      setEditUserError('Error updating user');
+    }
+  };
+
+  const handleAddUser = async () => {
+    // Validate required fields
+    const fullname = (addUserData.fullname || '').trim();
+    const email = (addUserData.email || '').trim();
+    const idNumber = (addUserData.id_number || '').trim();
+    const department = (addUserData.department || '').trim();
+    const password = (addUserData.password || '').trim();
+    const confirmPassword = (addUserData.confirmPassword || '').trim();
+    const sub = (addUserData.sub || '').trim();
+
+    if (!fullname || !email || !idNumber || !department || !password || !confirmPassword) {
+      setAddUserError('Please fill in all required fields.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setAddUserError('Passwords do not match.');
+      return;
+    }
+
+    if (!email.endsWith('@shc.edu.ph')) {
+      setAddUserError('Email must end with @shc.edu.ph');
+      return;
+    }
+
+    if (department === 'BED' && !sub) {
+      setAddUserError('Please select a Grade Level for BED.');
+      return;
+    }
+
+    if (department === 'HED' && !sub) {
+      setAddUserError('Please select a Course for HED.');
+      return;
+    }
+
+    setAddUserError('');
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/auth/register`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+        },
+        body: JSON.stringify({
+          fullname,
+          email,
+          id_number: idNumber,
+          department,
+          sub,
+          password
+        })
+      });
+
+      if (res.ok) {
+        setAddUserSuccess(true);
+        setUserSuccessMsg('User added successfully!');
+        setTimeout(() => setUserSuccessMsg(''), 3500);
+        setAddUserData({
+          fullname: '',
+          email: '',
+          id_number: '',
+          department: '',
+          sub: '',
+          password: '',
+          confirmPassword: ''
+        });
+        setTimeout(() => setShowAddUserModal(false), 800);
+        await fetchUsers();
+      } else {
+        const errData = await res.json();
+        const formatted = formatApiError(errData.detail || errData);
+        setAddUserError(formatted || 'Failed to add user');
+      }
+    } catch (err) {
+      console.error('Error adding user:', err);
+      setAddUserError('Error adding user');
+    }
+  };
+
+  const handleDeleteUser = (user) => {
+    setDeleteUserError('');
+    setDeleteUserId(user?.id ?? null);
+    setDeleteUserName(user?.fullname ?? '');
+    setShowDeleteUserModal(true);
+  };
+
+  const confirmDeleteUser = async () => {
+    if (!deleteUserId) return;
+
+    const url = `${API_BASE_URL}/auth/user/${deleteUserId}`;
+      console.debug('Deleting user:', deleteUserId, deleteUserName ? `(${deleteUserName})` : '', 'URL:', url);
+
+    try {
+      const res = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+        }
+      });
+
+      if (res.ok) {
+        setShowDeleteUserModal(false);
+        setDeleteUserId(null);
+        setDeleteUserName('');
+        setDeleteUserError('');
+        setUserSuccessMsg('User deleted successfully!');
+        setTimeout(() => setUserSuccessMsg(''), 3500);
+        await fetchUsers();
+      } else {
+        const contentType = res.headers.get('Content-Type') || '';
+        let message = `Failed to delete user (status ${res.status})`;
+        try {
+          if (contentType.includes('application/json')) {
+            const data = await res.json();
+            message = data.detail || JSON.stringify(data);
+          } else {
+            const text = await res.text();
+            if (text) message = text;
+          }
+        } catch (parseErr) {
+          console.warn('Failed to parse delete response:', parseErr);
+        }
+        console.warn('Delete user failed', res.status, message);
+        setDeleteUserError(message);
+      }
+    } catch (err) {
+      console.error('Error deleting user:', err);
+      setDeleteUserError(`Error deleting user: ${err.message || err}`);
+    }
+  };
 
   const formatDate = (dateString) => {
     try {
@@ -362,7 +650,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchEquipment = useCallback(async () => {
     try {
-      const res = await fetch('https://backend-58cw.onrender.com/equipment/', {
+      const res = await fetch(`${API_BASE_URL}/equipment/`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -386,7 +674,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchRooms = useCallback(async () => {
     try {
-      const res = await fetch('https://backend-58cw.onrender.com/rooms/', {
+      const res = await fetch(`${API_BASE_URL}/rooms/`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -405,7 +693,7 @@ function AdminDashboard({ onLogout }) {
       const token = localStorage.getItem('access_token');
       console.log('DEBUG - Fetching reservations with token:', token ? 'present' : 'missing');
       
-      const res = await fetch('https://backend-58cw.onrender.com/reservations/', {
+      const res = await fetch(`${API_BASE_URL}/reservations/`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -434,7 +722,7 @@ function AdminDashboard({ onLogout }) {
 
   const fetchEquipmentReturns = useCallback(async () => {
     try {
-      const res = await fetch('https://backend-58cw.onrender.com/equipment-returns/', {
+      const res = await fetch(`${API_BASE_URL}/equipment-returns/`, {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         }
@@ -448,7 +736,7 @@ function AdminDashboard({ onLogout }) {
           
           // Use data from API response directly - it already has username, department, id_number
           const userName = ret.username || 'Unknown User';
-          const departmentName = ret.department || 'Unknown';
+          const departmentName = ret.department || 'NTP';
           const idNumberValue = ret.id_number || '';
           
           return {
@@ -568,6 +856,124 @@ function AdminDashboard({ onLogout }) {
     localStorage.setItem('recentReturns', JSON.stringify(recentReturns));
   }, [recentReturns]);
 
+  // Real-time WebSocket updates for reservations and equipment returns
+  useEffect(() => {
+    const token = localStorage.getItem('access_token');
+    if (!token) return;
+
+    let ws = null;
+    let pingTimer = null;
+    let reconnectTimeout = null;
+    let isManuallyClosing = false;
+
+    const connectWebSocket = () => {
+      try {
+        ws = new WebSocket(`${WS_BASE_URL}/ws?token=${encodeURIComponent(token)}`);
+
+        ws.onopen = () => {
+          console.log('[AdminDashboard WebSocket] Connected');
+          // Keep-alive ping
+          pingTimer = window.setInterval(() => {
+            try {
+              if (ws && ws.readyState === WebSocket.OPEN) ws.send('ping');
+            } catch (e) {
+              // ignore
+            }
+          }, 25000);
+        };
+
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            const t = msg && msg.type;
+            if (!t || t === 'connected') return;
+
+            // Refresh reservations when any reservation event occurs
+            if (t.startsWith('reservation.') || t.startsWith('equipment_return.')) {
+              console.log('[AdminDashboard WebSocket] Received:', t);
+              awaitFetchForReservations();
+            }
+
+            // Refresh rooms when any room event occurs
+            if (t.startsWith('room.')) {
+              console.log('[AdminDashboard WebSocket] Received:', t);
+              fetchRooms();
+            }
+
+            // Refresh equipment when any equipment event occurs
+            if (t.startsWith('equipment.')) {
+              console.log('[AdminDashboard WebSocket] Received:', t);
+              fetchEquipment();
+            }
+          } catch (e) {
+            // ignore malformed messages
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error('[AdminDashboard WebSocket] Error:', error);
+        };
+
+        ws.onclose = () => {
+          console.log('[AdminDashboard WebSocket] Disconnected');
+          if (pingTimer) window.clearInterval(pingTimer);
+          
+          // Auto-reconnect after 5 seconds unless manually closing
+          if (!isManuallyClosing) {
+            reconnectTimeout = window.setTimeout(() => {
+              console.log('[AdminDashboard WebSocket] Attempting to reconnect...');
+              connectWebSocket();
+            }, 5000);
+          }
+        };
+      } catch (e) {
+        console.error('[AdminDashboard WebSocket] Connection error:', e);
+      }
+    };
+
+    // Initial connection
+    connectWebSocket();
+
+    return () => {
+      isManuallyClosing = true;
+      try {
+        if (pingTimer) window.clearInterval(pingTimer);
+      } catch (e) {
+        // ignore
+      }
+      try {
+        if (reconnectTimeout) window.clearTimeout(reconnectTimeout);
+      } catch (e) {
+        // ignore
+      }
+      try {
+        if (ws) ws.close();
+      } catch (e) {
+        // ignore
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Real-time polling fallback: refresh reservations and rooms every 1 second
+  useEffect(() => {
+    const pollInterval = window.setInterval(async () => {
+      try {
+        await awaitFetchForReservations();
+        await fetchEquipmentReturns();
+        await fetchRooms();
+        await fetchEquipment();
+      } catch (err) {
+        console.error('[AdminDashboard] Error during polling update:', err);
+      }
+    }, 1000); // 1 second
+
+    return () => {
+      if (pollInterval) window.clearInterval(pollInterval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleApproveReservation = async (reservationId) => {
     const r = reservations.find(x => x.id === reservationId);
     if (!r) return;
@@ -583,7 +989,7 @@ function AdminDashboard({ onLogout }) {
       approved_by_name: approverName
     };
     try {
-      const res = await fetch(`https://backend-58cw.onrender.com/reservations/${reservationId}`, {
+      const res = await fetch(`${API_BASE_URL}/reservations/${reservationId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -611,7 +1017,7 @@ function AdminDashboard({ onLogout }) {
                 itemDisplay = room.name;
               }
             }
-            await fetch('https://backend-58cw.onrender.com/notifications/', {
+            await fetch(`${API_BASE_URL}/notifications/`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -660,42 +1066,6 @@ function AdminDashboard({ onLogout }) {
     }
   };
 
-  const handleDenyReservation = async (reservationId, reason = null) => {
-    const r = reservations.find(x => x.id === reservationId);
-    if (!r) return;
-    const payload = {
-      item_type: r.item_type,
-      item_id: r.item_id,
-      date_needed: r.date_needed,
-      time_from: r.time_from,
-      time_to: r.time_to,
-      purpose: r.purpose,
-      status: 'denied',
-      user_id: r.user_id,
-      rejection_reason: reason
-    };
-    try {
-      const res = await fetch(`https://backend-58cw.onrender.com/reservations/${reservationId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-        },
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        await fetchReservations();
-        await fetchStats();
-      } else {
-        console.error('Failed to deny reservation');
-        alert('Failed to deny reservation');
-      }
-    } catch (err) {
-      console.error(err);
-      alert('Error denying reservation');
-    }
-  };
-
   const openRejectModal = (reservationId) => {
     setRejectReservationId(reservationId);
     setRejectReason('');
@@ -708,7 +1078,7 @@ function AdminDashboard({ onLogout }) {
     
     try {
       // Delete the reservation from the backend
-      const delRes = await fetch(`https://backend-58cw.onrender.com/reservations/${deleteReservationId}`, {
+      const delRes = await fetch(`${API_BASE_URL}/reservations/${deleteReservationId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -726,7 +1096,7 @@ function AdminDashboard({ onLogout }) {
         const eq = equipment.find(e => String(e.id) === String(target.item_id));
         if (eq) {
           try {
-            await fetch(`https://backend-58cw.onrender.com/equipment/${eq.id}`, {
+            await fetch(`${API_BASE_URL}/equipment/${eq.id}`, {
               method: 'PUT',
               headers: {
                 'Content-Type': 'application/json',
@@ -769,98 +1139,101 @@ function AdminDashboard({ onLogout }) {
       return;
     }
     const target = reservations.find(r => r.id === rejectReservationId);
-    try {
-      await handleDenyReservation(rejectReservationId, rejectReason.trim());
+    
+    // Close modal IMMEDIATELY without waiting for API calls
+    setShowRejectModal(false);
+    setRejectReservationId(null);
+    setRejectReason('');
 
-      // Create notification for the user about rejection
-      try {
-        if (target && target.user_id) {
-          // Get item name with number - always look up from equipment/rooms arrays
-          let itemDisplay = 'item';
-          if (target.item_type === 'equipment') {
-            const eq = equipment.find(e => String(e.id) === String(target.item_id));
-            if (eq) {
-              itemDisplay = `${eq.name} (#${eq.item_number})`;
-            }
-          } else if (target.item_type === 'room') {
-            const room = rooms.find(r => String(r.id) === String(target.item_id));
-            if (room) {
-              itemDisplay = room.name;
-            }
+    // Show rejection success banner immediately
+    setRejectSuccessMsg('Reservation rejected successfully');
+    setTimeout(() => setRejectSuccessMsg(''), 3500);
+
+    // Perform all API operations in parallel in the background (fire and forget)
+    // Don't await these - WebSocket will update the UI automatically
+    try {
+      const payload = {
+        item_type: target.item_type,
+        item_id: target.item_id,
+        date_needed: target.date_needed,
+        time_from: target.time_from,
+        time_to: target.time_to,
+        purpose: target.purpose,
+        status: 'denied',
+        user_id: target.user_id,
+        rejection_reason: rejectReason.trim()
+      };
+
+      // Deny the reservation - don't await
+      fetch(`${API_BASE_URL}/reservations/${rejectReservationId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+        },
+        body: JSON.stringify(payload)
+      }).catch(err => console.warn('Failed to deny reservation:', err));
+
+      // Create notification for the user about rejection - don't await
+      if (target && target.user_id) {
+        // Get item name with number - always look up from equipment/rooms arrays
+        let itemDisplay = 'item';
+        if (target.item_type === 'equipment') {
+          const eq = equipment.find(e => String(e.id) === String(target.item_id));
+          if (eq) {
+            itemDisplay = `${eq.name} (#${eq.item_number})`;
           }
-          await fetch('https://backend-58cw.onrender.com/notifications/', {
-            method: 'POST',
+        } else if (target.item_type === 'room') {
+          const room = rooms.find(r => String(r.id) === String(target.item_id));
+          if (room) {
+            itemDisplay = room.name;
+          }
+        }
+        fetch(`${API_BASE_URL}/notifications/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+          },
+          body: JSON.stringify({
+            user_id: target.user_id,
+            title: 'Reservation Rejected',
+            message: `Your reservation for ${itemDisplay} on ${target.date_needed} was rejected. Reason: ${rejectReason.trim()}`,
+            type: 'rejection',
+            reservation_id: rejectReservationId
+          })
+        }).catch(err => console.warn('Failed to create notification:', err));
+      }
+
+      // Attempt to delete the reservation from the backend - don't await
+      fetch(`${API_BASE_URL}/reservations/${rejectReservationId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+        }
+      }).catch(err => console.warn('Error deleting reservation after denial:', err));
+
+      // If this was an equipment reservation, mark the equipment as available - don't await
+      if (target && target.item_type === 'equipment') {
+        const eq = equipment.find(e => String(e.id) === String(target.item_id));
+        if (eq) {
+          fetch(`${API_BASE_URL}/equipment/${eq.id}`, {
+            method: 'PUT',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${localStorage.getItem('access_token')}`
             },
             body: JSON.stringify({
-              user_id: target.user_id,
-              title: 'Reservation Rejected',
-              message: `Your reservation for ${itemDisplay} on ${target.date_needed} was rejected. Reason: ${rejectReason.trim()}`,
-              type: 'rejection',
-              reservation_id: rejectReservationId
+              name: eq.name,
+              item_number: eq.item_number || eq.itemNumber || '',
+              available: true,
+              image: eq.image || null
             })
-          });
-        }
-      } catch (err) {
-        console.warn('Failed to create notification:', err);
-      }
-
-      // Attempt to delete the reservation from the backend
-      try {
-        const delRes = await fetch(`https://backend-58cw.onrender.com/reservations/${rejectReservationId}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-          }
-        });
-        if (!delRes.ok) {
-          console.warn('Failed to delete reservation after denial', delRes.status);
-        }
-      } catch (err) {
-        console.warn('Error deleting reservation after denial', err);
-      }
-
-      // If this was an equipment reservation, mark the equipment as available
-      if (target && target.item_type === 'equipment') {
-        const eq = equipment.find(e => String(e.id) === String(target.item_id));
-        if (eq) {
-          try {
-            await fetch(`https://backend-58cw.onrender.com/equipment/${eq.id}`, {
-              method: 'PUT',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-              },
-              body: JSON.stringify({
-                name: eq.name,
-                item_number: eq.item_number || eq.itemNumber || '',
-                available: true,
-                image: eq.image || null
-              })
-            });
-          } catch (err) {
-            console.warn('Failed to mark equipment available', err);
-          }
+          }).catch(err => console.warn('Failed to mark equipment available:', err));
         }
       }
-
-      // Refresh UI
-      await fetchReservations();
-      await fetchEquipment();
-      await fetchStats();
-
-      setShowRejectModal(false);
-      setRejectReservationId(null);
-      setRejectReason('');
-
-      // Show rejection success banner briefly
-      setRejectSuccessMsg('Reservation rejected successfully');
-      setTimeout(() => setRejectSuccessMsg(''), 3500);
     } catch (err) {
       console.error('Error processing rejection:', err);
-      alert('Failed to reject reservation');
     }
   };
 
@@ -881,151 +1254,162 @@ function AdminDashboard({ onLogout }) {
     }
     console.log('DEBUG: Found equipment item:', equipmentItem);
 
-    try {
-      // Determine new equipment status based on condition
-      let newEquipmentStatus = 'Available';
-      if (returnCondition === 'damaged') {
-        newEquipmentStatus = 'For Repair';
-      } else if (returnCondition === 'maintenance') {
-        newEquipmentStatus = 'Under Maintenance';
-      }
+    // Save variables for background processing
+    const currentReturnCondition = returnCondition;
+    const currentReturnRemarks = returnRemarks;
+    const currentReturnReservationId = returnReservationId;
 
-      // Step 1: Update equipment status in inventory
-      console.log('Step 1: Updating equipment status...');
-      const updatePayload = {
-        name: equipmentItem.name,
-        item_number: equipmentItem.item_number || equipmentItem.itemNumber || '',
-        status: newEquipmentStatus,
-        available: newEquipmentStatus === 'Available',
-        image: equipmentItem.image || null
-      };
-      console.log('Equipment update payload:', updatePayload);
-      console.log('Equipment ID:', equipmentItem.id);
-      
-      const equipRes = await fetch(`https://backend-58cw.onrender.com/equipment/${equipmentItem.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-        },
-        body: JSON.stringify(updatePayload)
-      });
+    // Close modal immediately
+    setShowReturnModal(false);
+    setReturnReservationId(null);
+    setReturnCondition('good');
+    setReturnRemarks('');
+    setReturnLoading(true);
 
-      console.log('Equipment update response status:', equipRes.status);
-      const equipResData = await equipRes.json();
-      console.log('Equipment update response data:', equipResData);
-
-      if (!equipRes.ok) {
-        throw new Error(`Failed to update equipment status: ${equipRes.status} - ${JSON.stringify(equipResData)}`);
-      }
-
-      // Resolve user information
-      let userName = 'Unknown User';
-      let userIdNumber = '';
-      let userDepartment = 'Unknown';
-      let reserver = null;
-      
-      if (reservation.user && typeof reservation.user === 'object' && reservation.user.fullname) {
-        userName = reservation.user.fullname;
-        userIdNumber = reservation.user.id_number || '';
-        userDepartment = reservation.user.department || 'Unknown';
-      } else if (reservation.user_id) {
-        reserver = users.find(u => String(u.id) === String(reservation.user_id));
-        if (reserver) {
-          userName = reserver.fullname || reserver.name || reserver.email || 'Unknown User';
-          userIdNumber = reserver.id_number || '';
-          userDepartment = reserver.department || 'Unknown';
-        }
-      } else if (reservation.user_name || reservation.user_fullname) {
-        userName = reservation.user_name || reservation.user_fullname;
-      }
-
-      // Step 2: Save equipment return to database
-      console.log('Step 2: Saving equipment return to database...');
-      const returnPayload = {
-        equipment_id: equipmentItem.id,
-        condition: returnCondition,
-        remarks: returnRemarks || null,
-        new_status: newEquipmentStatus,
-        returned_at: new Date().toISOString(),
-        reservation_id: returnReservationId,
-        user_id: reservation.user_id || null,
-        username: userName,
-        equipment_name: equipmentItem.name,
-        department: userDepartment,
-        id_number: userIdNumber,
-        item_number: equipmentItem.item_number || equipmentItem.itemNumber || ''
-      };
-      
-      console.log('Return payload:', returnPayload);
-      
-      const dbRes = await fetch('https://backend-58cw.onrender.com/equipment-returns/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-        },
-        body: JSON.stringify(returnPayload)
-      });
-      
-      const dbResponseData = await dbRes.json();
-      console.log('Database response:', dbResponseData);
-      
-      if (!dbRes.ok) {
-        throw new Error(`Database error: ${dbRes.status} - ${JSON.stringify(dbResponseData)}`);
-      }
-
-      console.log('✓ Equipment return saved successfully to database');
-
-      // Step 3: Delete the reservation
-      console.log('Step 3: Deleting reservation...');
+    // Run the async operations in the background without blocking UI
+    (async () => {
       try {
-        const delRes = await fetch(`https://backend-58cw.onrender.com/reservations/${returnReservationId}`, {
-          method: 'DELETE',
+        // Determine new equipment status based on condition
+        let newEquipmentStatus = 'Available';
+        if (currentReturnCondition === 'damaged') {
+          newEquipmentStatus = 'For Repair';
+        } else if (currentReturnCondition === 'maintenance') {
+          newEquipmentStatus = 'Under Maintenance';
+        }
+
+        // Step 1: Update equipment status in inventory
+        console.log('Step 1: Updating equipment status...');
+        const updatePayload = {
+          name: equipmentItem.name,
+          item_number: equipmentItem.item_number || equipmentItem.itemNumber || '',
+          status: newEquipmentStatus,
+          available: newEquipmentStatus === 'Available',
+          image: equipmentItem.image || null
+        };
+        console.log('Equipment update payload:', updatePayload);
+        console.log('Equipment ID:', equipmentItem.id);
+        
+        const equipRes = await fetch(`${API_BASE_URL}/equipment/${equipmentItem.id}`, {
+          method: 'PUT',
           headers: {
+            'Content-Type': 'application/json',
             'Authorization': `Bearer ${localStorage.getItem('access_token')}`
-          }
+          },
+          body: JSON.stringify(updatePayload)
         });
-        if (!delRes.ok) {
-          console.warn('Could not delete reservation, but return was saved');
+
+        console.log('Equipment update response status:', equipRes.status);
+        const equipResData = await equipRes.json();
+        console.log('Equipment update response data:', equipResData);
+
+        if (!equipRes.ok) {
+          throw new Error(`Failed to update equipment status: ${equipRes.status} - ${JSON.stringify(equipResData)}`);
         }
+
+        // Resolve user information
+        let userName = 'Unknown User';
+        let userIdNumber = '';
+        let userDepartment = 'NTP';
+        let reserver = null;
+        
+        if (reservation.user && typeof reservation.user === 'object' && reservation.user.fullname) {
+          userName = reservation.user.fullname;
+          userIdNumber = reservation.user.id_number || '';
+          userDepartment = reservation.user.department || 'NTP';
+        } else if (reservation.user_id) {
+          reserver = users.find(u => String(u.id) === String(reservation.user_id));
+          if (reserver) {
+            userName = reserver.fullname || reserver.name || reserver.email || 'Unknown User';
+            userIdNumber = reserver.id_number || '';
+            userDepartment = reserver.department || 'NTP';
+          }
+        } else if (reservation.user_name || reservation.user_fullname) {
+          userName = reservation.user_name || reservation.user_fullname;
+        }
+
+        // Step 2: Save equipment return to database
+        console.log('Step 2: Saving equipment return to database...');
+        const returnPayload = {
+          equipment_id: equipmentItem.id,
+          condition: currentReturnCondition,
+          remarks: currentReturnRemarks || null,
+          new_status: newEquipmentStatus,
+          returned_at: new Date().toISOString(),
+          reservation_id: currentReturnReservationId,
+          user_id: reservation.user_id || null,
+          username: userName,
+          equipment_name: equipmentItem.name,
+          department: userDepartment,
+          id_number: userIdNumber,
+          item_number: equipmentItem.item_number || equipmentItem.itemNumber || ''
+        };
+        
+        console.log('Return payload:', returnPayload);
+        
+        const dbRes = await fetch(`${API_BASE_URL}/equipment-returns/`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+          },
+          body: JSON.stringify(returnPayload)
+        });
+        
+        const dbResponseData = await dbRes.json();
+        console.log('Database response:', dbResponseData);
+        
+        if (!dbRes.ok) {
+          throw new Error(`Database error: ${dbRes.status} - ${JSON.stringify(dbResponseData)}`);
+        }
+
+        console.log('✓ Equipment return saved successfully to database');
+
+        // Step 3: Delete the reservation
+        console.log('Step 3: Deleting reservation...');
+        try {
+          const delRes = await fetch(`${API_BASE_URL}/reservations/${currentReturnReservationId}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+            }
+          });
+          if (!delRes.ok) {
+            console.warn('Could not delete reservation, but return was saved');
+          }
+        } catch (err) {
+          console.warn('Error deleting reservation:', err);
+        }
+
+        // Step 4: Refresh data from database
+        console.log('Step 4: Refreshing data...');
+        try {
+          console.log('Calling fetchEquipment()...');
+          await fetchEquipment();
+          console.log('✓ fetchEquipment() completed');
+          console.log('Current equipment state after fetch:', equipment);
+        } catch (fetchErr) {
+          console.error('✗ Error in fetchEquipment:', fetchErr);
+          throw fetchErr;
+        }
+        
+        await fetchReservations();
+        await fetchStats();
+        await fetchEquipmentReturns();
+
+        // Show success message
+        setReturnSuccessMessage('Returned Successfully!');
+
+        // Auto-dismiss success message after 5 seconds
+        setTimeout(() => {
+          setReturnSuccessMessage('');
+        }, 5000);
       } catch (err) {
-        console.warn('Error deleting reservation:', err);
+        console.error('✗ Error processing equipment return:', err);
+        alert(`Error: ${err.message}`);
+      } finally {
+        setReturnLoading(false);
       }
-
-      // Step 4: Refresh data from database
-      console.log('Step 4: Refreshing data...');
-      try {
-        console.log('Calling fetchEquipment()...');
-        await fetchEquipment();
-        console.log('✓ fetchEquipment() completed');
-        console.log('Current equipment state after fetch:', equipment);
-      } catch (fetchErr) {
-        console.error('✗ Error in fetchEquipment:', fetchErr);
-        throw fetchErr;
-      }
-      
-      await fetchReservations();
-      await fetchStats();
-      await fetchEquipmentReturns();
-
-      // Show success message
-      setReturnSuccessMessage('Returned Successfully!');
-      
-      // Reset form
-      setShowReturnModal(false);
-      setReturnReservationId(null);
-      setReturnCondition('good');
-      setReturnRemarks('');
-
-      // Auto-dismiss success message after 5 seconds
-      setTimeout(() => {
-        setReturnSuccessMessage('');
-      }, 5000);
-    } catch (err) {
-      console.error('✗ Error processing equipment return:', err);
-      alert(`Error: ${err.message}`);
-    }
+    })();
   };
 
   const handleViewReservationAdmin = (reservationId) => {
@@ -1155,7 +1539,7 @@ function AdminDashboard({ onLogout }) {
     }
 
     try {
-      const res = await fetch(`https://backend-58cw.onrender.com/reservations/${editReservationData.id}`, {
+      const res = await fetch(`${API_BASE_URL}/reservations/${editReservationData.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1176,7 +1560,8 @@ function AdminDashboard({ onLogout }) {
         setEditReservationError('');
       } else {
         const error = await res.json();
-        setEditReservationError(error.detail || 'Failed to update reservation');
+        const formatted = formatApiError(error.detail || error);
+        setEditReservationError(formatted || 'Failed to update reservation');
       }
     } catch (err) {
       console.error('Error saving reservation:', err);
@@ -1205,6 +1590,11 @@ function AdminDashboard({ onLogout }) {
       });
     }
 
+    // Apply equipment name filter
+    if (inventoryEquipmentNameFilter !== 'All') {
+      filtered = filtered.filter(item => item.name === inventoryEquipmentNameFilter);
+    }
+
     return filtered;
   };
 
@@ -1213,7 +1603,7 @@ function AdminDashboard({ onLogout }) {
     if (!item) return;
 
     try {
-      const res = await fetch(`https://backend-58cw.onrender.com/equipment/${equipmentId}`, {
+      const res = await fetch(`${API_BASE_URL}/equipment/${equipmentId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1259,7 +1649,7 @@ function AdminDashboard({ onLogout }) {
 
       let successCount = 0;
       for (const update of updates) {
-        const res = await fetch(`https://backend-58cw.onrender.com/equipment/${update.id}`, {
+        const res = await fetch(`${API_BASE_URL}/equipment/${update.id}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -1390,7 +1780,7 @@ function AdminDashboard({ onLogout }) {
         ? equipmentName.toUpperCase()
         : getEquipmentCategory(newEquipment.name);
       
-      const res = await fetch('https://backend-58cw.onrender.com/equipment/', {
+      const res = await fetch(`${API_BASE_URL}/equipment/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1435,7 +1825,7 @@ function AdminDashboard({ onLogout }) {
 
   const confirmDeleteEquipment = async () => {
     try {
-      const res = await fetch(`https://backend-58cw.onrender.com/equipment/${equipmentToDelete}`, {
+      const res = await fetch(`${API_BASE_URL}/equipment/${equipmentToDelete}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -1458,7 +1848,7 @@ function AdminDashboard({ onLogout }) {
 
   const confirmDeleteRoom = async () => {
     try {
-      const res = await fetch(`https://backend-58cw.onrender.com/rooms/${roomToDelete}`, {
+      const res = await fetch(`${API_BASE_URL}/rooms/${roomToDelete}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
@@ -1515,7 +1905,7 @@ function AdminDashboard({ onLogout }) {
           reader.readAsDataURL(newRoom.image);
         });
       }
-      const res = await fetch('https://backend-58cw.onrender.com/rooms/', {
+      const res = await fetch(`${API_BASE_URL}/rooms/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1569,7 +1959,7 @@ function AdminDashboard({ onLogout }) {
     }
 
     try {
-      let imageData = editRoomData.image;
+      let imageData = null;
       if (editRoomData.image && editRoomData.image instanceof File) {
         const reader = new FileReader();
         imageData = await new Promise((resolve, reject) => {
@@ -1579,23 +1969,30 @@ function AdminDashboard({ onLogout }) {
         });
       }
 
-      const res = await fetch(`https://backend-58cw.onrender.com/rooms/${editRoomData.id}`, {
+      const updateData = {
+        name: editRoomData.name,
+        available: editRoomData.available
+      };
+
+      // Only include image if a new image was selected
+      if (imageData) {
+        updateData.image = imageData;
+      }
+
+      const res = await fetch(`${API_BASE_URL}/rooms/${editRoomData.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('access_token')}`
         },
-        body: JSON.stringify({
-          name: editRoomData.name,
-          available: editRoomData.available,
-          image: imageData
-        })
+        body: JSON.stringify(updateData)
       });
 
       if (res.ok) {
         fetchRooms();
         setShowEditRoomModal(false);
-        alert('Room updated successfully!');
+        setUpdateRoomSuccess(true);
+        setTimeout(() => setUpdateRoomSuccess(false), 3500);
       } else {
         const errData = await res.json();
         alert(errData.detail || 'Failed to update room');
@@ -1648,7 +2045,7 @@ function AdminDashboard({ onLogout }) {
         payload.image = imageData;
       }
 
-      const res = await fetch(`https://backend-58cw.onrender.com/equipment/${editEquipmentData.id}`, {
+      const res = await fetch(`${API_BASE_URL}/equipment/${editEquipmentData.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1674,7 +2071,7 @@ function AdminDashboard({ onLogout }) {
 
   const handleToggleRoomAvailability = async (room) => {
     try {
-      const res = await fetch(`https://backend-58cw.onrender.com/rooms/${room.id}`, {
+      const res = await fetch(`${API_BASE_URL}/rooms/${room.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1931,7 +2328,60 @@ function AdminDashboard({ onLogout }) {
 
           {activeTab === 'users' && (
             <div className="admin-section" key={activeTab}>
-              <h2>Registered Users</h2>
+              <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px'}}>
+                <h2 style={{margin: 0}}>Registered Users</h2>
+                <button
+                  className="btn-add-equipment"
+                  style={{backgroundColor: '#28a745', borderColor: '#28a745'}}
+                  onClick={() => {
+                    setAddUserError('');
+                    setAddUserSuccess(false);
+                    setAddUserData({
+                      fullname: '',
+                      email: '',
+                      id_number: '',
+                      department: '',
+                      sub: '',
+                      password: '',
+                      confirmPassword: ''
+                    });
+                    setShowAddUserModal(true);
+                  }}
+                >
+                  + Add User
+                </button>
+              </div>
+
+              {userSuccessMsg && (
+                <div style={{marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', backgroundColor: '#e6ffed', color: '#0b6b2f', borderRadius: '6px', fontWeight: 600}}>
+                  <span>{userSuccessMsg}</span>
+                  <button
+                    onClick={() => setUserSuccessMsg('')}
+                    style={{background: 'none', border: 'none', color: '#0b6b2f', cursor: 'pointer', fontSize: '1.2rem', fontWeight: 'bold', padding: '0 0 0 10px'}}
+                    aria-label="Close"
+                    title="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+              )}
+
+              <div style={{marginBottom: '20px'}}>
+                <input
+                  type="text"
+                  placeholder="Search by fullname, email, ID number, or department..."
+                  value={userSearchTerm}
+                  onChange={(e) => setUserSearchTerm(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '12px 16px',
+                    fontSize: '14px',
+                    border: '1px solid #ddd',
+                    borderRadius: '6px',
+                    boxSizing: 'border-box'
+                  }}
+                />
+              </div>
               
               <div className="user-department-tabs">
                 <button
@@ -1964,6 +2414,7 @@ function AdminDashboard({ onLogout }) {
                         <th>ID Number</th>
                         <th>Department</th>
                         <th>Date Registered</th>
+                        <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1975,6 +2426,21 @@ function AdminDashboard({ onLogout }) {
                           <td>{user.id_number}</td>
                           <td>{user.department}</td>
                           <td>{formatDate(user.created_at)}</td>
+                          <td>
+                            <button
+                              className="btn-edit-equipment"
+                              onClick={() => handleEditUser(user)}
+                              style={{marginRight: '8px'}}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="btn-delete-equipment"
+                              onClick={() => handleDeleteUser(user)}
+                            >
+                              Delete
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2047,21 +2513,54 @@ function AdminDashboard({ onLogout }) {
                       <div style={{fontSize: '0.85rem', opacity: 0.9}}>Total Equipment</div>
                     </div>
 
+                    {/* Total Available Equipment Card */}
+                    <div style={{
+                      backgroundColor: '#198754',
+                      color: 'white',
+                      padding: '12px',
+                      borderRadius: '6px',
+                      textAlign: 'center'
+                    }}>
+                      <div style={{fontSize: '1.8rem', fontWeight: 700}}>
+                        {equipment.filter(item => item.available === true || String(item.status || '').toLowerCase() === 'available').length}
+                      </div>
+                      <div style={{fontSize: '0.85rem', opacity: 0.9}}>Total Available</div>
+                    </div>
+
                     {/* Equipment by Type */}
                     {(() => {
-                      const equipmentByType = {};
+                      const equipmentStats = {};
                       equipment.forEach(item => {
                         const type = item.name || 'Unknown';
-                        equipmentByType[type] = (equipmentByType[type] || 0) + 1;
+                        if (!equipmentStats[type]) {
+                          equipmentStats[type] = { total: 0, in: 0, out: 0 };
+                        }
+                        equipmentStats[type].total += 1;
+
+                        // Determine availability based on explicit flag or status field
+                        const isAvailable = item.available === true || String(item.status || '').toLowerCase() === 'available';
+                        if (isAvailable) {
+                          equipmentStats[type].in += 1;
+                        } else {
+                          equipmentStats[type].out += 1;
+                        }
                       });
-                      
-                      // Sort by count descending
-                      const sorted = Object.entries(equipmentByType)
-                        .sort(([, countA], [, countB]) => countB - countA);
+
+                      // Separate custom equipment from predefined equipment
+                      const predefinedItems = Object.entries(equipmentStats).filter(([type]) => ITEM_NAMES.includes(type));
+                      const customItems = Object.entries(equipmentStats).filter(([type]) => !ITEM_NAMES.includes(type));
+
+                      // Sort both lists by count descending
+                      predefinedItems.sort(([, a], [, b]) => b.total - a.total);
+                      customItems.sort(([, a], [, b]) => b.total - a.total);
+
+                      // Combine: always show custom items first, then fill with top predefined items
+                      const remainingSlots = 7 - customItems.length;
+                      const displayItems = [...customItems, ...predefinedItems.slice(0, remainingSlots)];
                       
                       const colors = ['#8b95a4', '#8b95a4', '#8b95a4', '#8b95a4', '#8b95a4', '#8b95a4', '#8b95a4'];
                       
-                      return sorted.slice(0, 7).map(([type, count], idx) => (
+                      return displayItems.map(([type, stats], idx) => (
                         <div key={type} style={{
                           backgroundColor: colors[idx % colors.length],
                           color: 'white',
@@ -2069,8 +2568,16 @@ function AdminDashboard({ onLogout }) {
                           borderRadius: '6px',
                           textAlign: 'center'
                         }}>
-                          <div style={{fontSize: '1.6rem', fontWeight: 700}}>{count}</div>
+                          <div style={{fontSize: '1.6rem', fontWeight: 700}}>{stats.total}</div>
                           <div style={{fontSize: '0.8rem', maxHeight: '2.4em', overflow: 'hidden', wordBreak: 'break-word'}}>{type}</div>
+                          <div style={{display: 'flex', justifyContent: 'center', gap: '8px', marginTop: '6px', flexWrap: 'wrap'}}>
+                            <span style={{backgroundColor: '#d4edda', color: '#0f5132', padding: '2px 10px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600}}>
+                              IN {stats.in}
+                            </span>
+                            <span style={{backgroundColor: '#f8d7da', color: '#842029', padding: '2px 10px', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600}}>
+                              OUT {stats.out}
+                            </span>
+                          </div>
                         </div>
                       ));
                     })()}
@@ -2081,72 +2588,101 @@ function AdminDashboard({ onLogout }) {
               {equipment.length === 0 ? (
                 <p>No equipment registered yet</p>
               ) : (
-                <div className="equipment-table-container">
-                  <table className="equipment-table">
-                    <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>Equipment Name</th>
-                        <th>Item Number</th>
-                        <th>Image</th>
-                        <th>Status</th>
-                        <th>Date Added</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {equipment.map(item => (
-                        <tr key={item.id}>
-                          <td>{item.id}</td>
-                          <td>{item.name}</td>
-                          <td>{item.item_number}</td>
-                          <td>
-                            {item.image ? (
-                              <img 
-                                src={item.image} 
-                                alt={item.name}
-                                style={{maxWidth: '50px', maxHeight: '50px', borderRadius: '4px'}}
-                              />
-                            ) : (
-                              <span style={{color: '#999', fontSize: '0.9rem'}}>No image</span>
-                            )}
-                          </td>
-                          <td>
-                            <span style={{
-                              padding: '4px 8px',
-                              borderRadius: '4px',
-                              ...getEquipmentStatusStyles(getEquipmentStatusLabel(item)),
-                              fontSize: '0.85rem',
-                              fontWeight: '600',
-                              cursor: 'pointer'
-                            }}
-                            onClick={() => handleEditEquipment(item)}
-                            title="Click to edit status"
-                            >
-                              {getEquipmentStatusLabel(item)}
-                            </span>
-                          </td>
-                          <td>{formatDate(item.created_at)}</td>
-                          <td>
-                            <button
-                              className="btn-edit-equipment"
-                              onClick={() => handleEditEquipment(item)}
-                              style={{marginRight: '8px'}}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              className="btn-delete-equipment"
-                              onClick={() => handleDeleteEquipment(item.id)}
-                            >
-                              Delete
-                            </button>
-                          </td>
+                <>
+                  <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px', flexWrap: 'wrap', gap: '12px'}}>
+                    <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
+                      <label htmlFor="equipment-filter" style={{fontWeight: 600, color: '#334155'}}>Filter:</label>
+                      <select
+                        id="equipment-filter"
+                        value={equipmentFilter}
+                        onChange={e => setEquipmentFilter(e.target.value)}
+                        style={{padding: '6px 10px', borderRadius: '999px', border: '1px solid #cbd5e1', background: 'white'}}
+                      >
+                        <option value="">All equipment</option>
+                        {equipmentTypes.map(name => (
+                          <option key={name} value={name}>{name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {equipmentFilter && (
+                      <button
+                        onClick={() => setEquipmentFilter('')}
+                        style={{padding: '6px 12px', borderRadius: '999px', border: '1px solid #cbd5e1', background: '#f8fafc', cursor: 'pointer'}}
+                      >
+                        Clear filter
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="equipment-table-container">
+                    <table className="equipment-table">
+                      <thead>
+                        <tr>
+                          <th>ID</th>
+                          <th>Equipment Name</th>
+                          <th>Item Number</th>
+                          <th>Image</th>
+                          <th>Status</th>
+                          <th>Date Added</th>
+                          <th>Action</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {equipment
+                          .filter(item => !equipmentFilter || (item.name || '').toLowerCase().includes(equipmentFilter.toLowerCase()))
+                          .map(item => (
+                            <tr key={item.id}>
+                              <td>{item.id}</td>
+                              <td>{item.name}</td>
+                              <td>{item.item_number}</td>
+                              <td>
+                                {item.image ? (
+                                  <img 
+                                    src={item.image} 
+                                    alt={item.name}
+                                    style={{maxWidth: '50px', maxHeight: '50px', borderRadius: '4px'}}
+                                  />
+                                ) : (
+                                  <span style={{color: '#999', fontSize: '0.9rem'}}>No image</span>
+                                )}
+                              </td>
+                              <td>
+                                <span style={{
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  ...getEquipmentStatusStyles(getEquipmentStatusLabel(item)),
+                                  fontSize: '0.85rem',
+                                  fontWeight: '600',
+                                  cursor: 'pointer'
+                                }}
+                                onClick={() => handleEditEquipment(item)}
+                                title="Click to edit status"
+                                >
+                                  {getEquipmentStatusLabel(item)}
+                                </span>
+                              </td>
+                              <td>{formatDate(item.created_at)}</td>
+                              <td>
+                                <button
+                                  className="btn-edit-equipment"
+                                  onClick={() => handleEditEquipment(item)}
+                                  style={{marginRight: '8px'}}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  className="btn-delete-equipment"
+                                  onClick={() => handleDeleteEquipment(item.id)}
+                                >
+                                  Delete
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           )}
@@ -2235,9 +2771,108 @@ function AdminDashboard({ onLogout }) {
                 )}
               </div>
 
+              {/* Equipment Table Toggle Button */}
+              <div style={{marginBottom: '20px'}}>
+                <button
+                  onClick={() => setShowInventoryTable(!showInventoryTable)}
+                  style={{
+                    padding: '10px 20px',
+                    backgroundColor: showInventoryTable ? '#e03131' : '#1971c2',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '6px',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    fontSize: '0.95rem',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  {showInventoryTable ? '▼ Hide Equipments' : '▶ View Equipments'}
+                </button>
+              </div>
+
+              {/* Equipment Name Tabs */}
+              {showInventoryTable && (
+                <div style={{marginBottom: '20px'}}>
+                  <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
+                    <button
+                      onClick={() => setInventoryEquipmentNameFilter('All')}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: '6px',
+                        border: '1px solid #dee2e6',
+                        background: inventoryEquipmentNameFilter === 'All' ? '#1971c2' : '#fff',
+                        color: inventoryEquipmentNameFilter === 'All' ? '#fff' : '#333',
+                        fontWeight: '500',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease'
+                      }}
+                    >
+                      All ({(() => {
+                        let filtered = equipment;
+                        if (inventorySearchTerm.trim()) {
+                          const term = inventorySearchTerm.toLowerCase();
+                          filtered = filtered.filter(item =>
+                            item.name.toLowerCase().includes(term) ||
+                            item.item_number.toString().toLowerCase().includes(term)
+                          );
+                        }
+                        if (inventoryStatusFilter !== 'All') {
+                          filtered = filtered.filter(item => {
+                            const status = getEquipmentStatusLabel(item);
+                            return status === inventoryStatusFilter;
+                          });
+                        }
+                        return filtered.length;
+                      })()})
+                    </button>
+                    {Array.from(new Set(equipment.map(e => e.name)))
+                      .sort()
+                      .map(equipmentName => {
+                        const count = (() => {
+                          let filtered = equipment;
+                          if (inventorySearchTerm.trim()) {
+                            const term = inventorySearchTerm.toLowerCase();
+                            filtered = filtered.filter(item =>
+                              item.name.toLowerCase().includes(term) ||
+                              item.item_number.toString().toLowerCase().includes(term)
+                            );
+                          }
+                          if (inventoryStatusFilter !== 'All') {
+                            filtered = filtered.filter(item => {
+                              const status = getEquipmentStatusLabel(item);
+                              return status === inventoryStatusFilter;
+                            });
+                          }
+                          return filtered.filter(e => e.name === equipmentName).length;
+                        })();
+                        return (
+                          <button
+                            key={equipmentName}
+                            onClick={() => setInventoryEquipmentNameFilter(equipmentName)}
+                            style={{
+                              padding: '8px 16px',
+                              borderRadius: '6px',
+                              border: '1px solid #dee2e6',
+                              background: inventoryEquipmentNameFilter === equipmentName ? '#1971c2' : '#fff',
+                              color: inventoryEquipmentNameFilter === equipmentName ? '#fff' : '#333',
+                              fontWeight: '500',
+                              cursor: 'pointer',
+                              transition: 'all 0.2s ease'
+                            }}
+                          >
+                            {equipmentName} ({count})
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
+
               {/* Equipment Table */}
-              <div className="equipment-table-container">
-                <table className="equipment-table">
+              {showInventoryTable && (
+                <div className="equipment-table-container">
+                  <table className="equipment-table">
                   <thead>
                     <tr>
                       <th style={{width: '40px'}}>
@@ -2318,6 +2953,7 @@ function AdminDashboard({ onLogout }) {
                   </tbody>
                 </table>
               </div>
+              )}
             </div>
           )}
 
@@ -2364,8 +3000,8 @@ function AdminDashboard({ onLogout }) {
                       style={{padding: '8px', borderRadius: '4px', border: '1px solid #ddd', fontSize: '0.9rem'}}
                     >
                       <option value="All">All Departments</option>
-                      {[...new Set(recentReturns.map(r => r.department))].map(dept => (
-                        <option key={dept} value={dept}>{dept} ({recentReturns.filter(r => r.department === dept).length})</option>
+                      {[...new Set(recentReturns.map(r => r.department === 'Unknown' ? 'NTP' : r.department))].map(dept => (
+                        <option key={dept} value={dept}>{dept} ({recentReturns.filter(r => (r.department === 'Unknown' ? 'NTP' : r.department) === dept).length})</option>
                       ))}
                     </select>
                     <select
@@ -2420,7 +3056,7 @@ function AdminDashboard({ onLogout }) {
                       
                       const filtered = recentReturns.filter(ret => {
                         const matchDate = !returnsDateFilter || ret.returnDate === new Date(returnsDateFilter).toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' });
-                        const matchDept = returnsDepartmentFilter === 'All' || ret.department === returnsDepartmentFilter;
+                        const matchDept = returnsDepartmentFilter === 'All' || (ret.department === 'Unknown' ? 'NTP' : ret.department) === returnsDepartmentFilter;
                         const matchCondition = returnsConditionFilter === 'All' || ret.condition === returnsConditionFilter;
                         const matchSearch = !returnsSearchTerm || 
                           ret.userName.toLowerCase().includes(returnsSearchTerm.toLowerCase()) ||
@@ -2928,7 +3564,7 @@ function AdminDashboard({ onLogout }) {
                             <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
                               {peakUsageData.peak_times.map((item, idx) => (
                                 <div key={idx} style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '6px'}}>
-                                  <span style={{fontWeight: '500'}}>{item.time}</span>
+                                  <span style={{fontWeight: '500'}}>{formatTime12Hour(item.time)}</span>
                                   <span style={{background: '#f59f00', color: '#fff', padding: '4px 8px', borderRadius: '4px', fontSize: '0.85rem', fontWeight: '600'}}>{item.reservations} bookings</span>
                                 </div>
                               ))}
@@ -3067,6 +3703,14 @@ function AdminDashboard({ onLogout }) {
                 <div style={{marginBottom: '16px'}}>
                   <div style={{display: 'inline-block', padding: '10px 14px', backgroundColor: '#e6ffed', color: '#0b6b2f', borderRadius: '6px', fontWeight: 600}}>
                     Room added successfully!
+                  </div>
+                </div>
+              )}
+
+              {updateRoomSuccess && (
+                <div style={{marginBottom: '16px'}}>
+                  <div style={{display: 'inline-block', padding: '10px 14px', backgroundColor: '#e6ffed', color: '#0b6b2f', borderRadius: '6px', fontWeight: 600}}>
+                    Room updated successfully!
                   </div>
                 </div>
               )}
@@ -3519,14 +4163,17 @@ function AdminDashboard({ onLogout }) {
                   setReturnCondition('good');
                   setReturnRemarks('');
                 }}
+                disabled={returnLoading}
               >
                 CANCEL
               </button>
               <button 
                 className="btn-confirm" 
                 onClick={handleEquipmentReturn}
+                disabled={returnLoading}
+                style={{opacity: returnLoading ? 0.5 : 1, cursor: returnLoading ? 'not-allowed' : 'pointer'}}
               >
-                MARK RETURNED
+                {returnLoading ? 'PROCESSING...' : 'MARK RETURNED'}
               </button>
             </div>
           </div>
@@ -3779,6 +4426,263 @@ function AdminDashboard({ onLogout }) {
                 onClick={handleSaveRoom}
               >
                 SAVE CHANGES
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Modal */}
+      {showEditUserModal && (
+        <div className="admin-modal-overlay">
+          <div className="admin-modal" style={{maxWidth: '600px'}}>
+            <h3>Edit User</h3>
+            {editUserError && (
+              <div style={{
+                padding: '10px 12px',
+                marginBottom: '16px',
+                backgroundColor: '#ffe0e0',
+                color: '#cc0000',
+                borderRadius: '6px',
+                fontSize: '0.9rem',
+                border: '1px solid #ff9999'
+              }}>
+                {editUserError}
+              </div>
+            )}
+            <div style={{marginBottom: '16px'}}>
+              <label style={{display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '0.9rem'}}>Full Name</label>
+              <input
+                type="text"
+                value={editUserData.fullname}
+                onChange={(e) => setEditUserData({...editUserData, fullname: e.target.value})}
+                className="equipment-input"
+              />
+            </div>
+            <div style={{marginBottom: '16px'}}>
+              <label style={{display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '0.9rem'}}>Email</label>
+              <input
+                type="email"
+                value={editUserData.email}
+                onChange={(e) => setEditUserData({...editUserData, email: e.target.value})}
+                className="equipment-input"
+              />
+            </div>
+            <div style={{marginBottom: '16px'}}>
+              <label style={{display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '0.9rem'}}>ID Number</label>
+              <input
+                type="text"
+                value={editUserData.id_number}
+                onChange={(e) => setEditUserData({...editUserData, id_number: e.target.value})}
+                className="equipment-input"
+              />
+            </div>
+            <div style={{marginBottom: '16px'}}>
+              <label style={{display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '0.9rem'}}>Department</label>
+              <input
+                type="text"
+                value={editUserData.department}
+                onChange={(e) => setEditUserData({...editUserData, department: e.target.value})}
+                className="equipment-input"
+              />
+            </div>
+            <div style={{marginBottom: '16px'}}>
+              <label style={{display: 'block', marginBottom: '8px', fontWeight: '600', fontSize: '0.9rem'}}>Sub (Optional)</label>
+              <input
+                type="text"
+                value={editUserData.sub}
+                onChange={(e) => setEditUserData({...editUserData, sub: e.target.value})}
+                className="equipment-input"
+                placeholder="e.g., (if any)"
+              />
+            </div>
+            <div className="modal-buttons">
+              <button
+                className="btn-cancel"
+                onClick={() => {
+                  setShowEditUserModal(false);
+                  setEditUserError('');
+                }}
+              >
+                CANCEL
+              </button>
+              <button className="btn-confirm" onClick={handleSaveEditUser}>
+                SAVE CHANGES
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add User Modal */}
+      {showAddUserModal && (
+        <div className="regform-modal-bg">
+          <div className="regform-modal">
+            <h2 className="regform-title">Add New User</h2>
+
+            {addUserError && (
+              <div style={{color: '#c53030', fontSize: '0.9rem', marginBottom: 10, padding: '8px 12px', backgroundColor: '#fef2f2', borderRadius: '6px', borderLeft: '3px solid #c53030'}}>
+                {addUserError}
+              </div>
+            )}
+            {addUserSuccess && (
+              <div style={{color: '#276749', fontSize: '0.9rem', marginBottom: 10, padding: '8px 12px', backgroundColor: '#f0fdf4', borderRadius: '6px', borderLeft: '3px solid #276749'}}>
+                User added successfully!
+              </div>
+            )}
+
+            <form className="regform-form" onSubmit={(e) => { e.preventDefault(); handleAddUser(); }}>
+              <label>FULLNAME
+                <input
+                  type="text"
+                  value={addUserData.fullname}
+                  onChange={e => setAddUserData({...addUserData, fullname: e.target.value})}
+                  className="regform-input"
+                  placeholder=""
+                />
+              </label>
+              <label>DOMAIN ACCOUNT
+                <input
+                  type="email"
+                  value={addUserData.email}
+                  onChange={e => setAddUserData({...addUserData, email: e.target.value})}
+                  className="regform-input"
+                  placeholder="name@shc.edu.ph"
+                />
+              </label>
+              <label>ID NUMBER
+                <input
+                  type="text"
+                  value={addUserData.id_number}
+                  onChange={e => setAddUserData({...addUserData, id_number: e.target.value})}
+                  className="regform-input"
+                  placeholder=""
+                />
+              </label>
+              <label>DEPARTMENT
+                <select
+                  className="form-select form-select-sm rounded-pill"
+                  value={addUserData.department}
+                  onChange={(e) => {
+                    setAddUserData({
+                      ...addUserData,
+                      department: e.target.value,
+                      sub: ''
+                    });
+                  }}
+                >
+                  <option value="">Select Department</option>
+                  <option value="BED">BED</option>
+                  <option value="HED">HED</option>
+                  <option value="FACULTY">FACULTY</option>
+                  <option value="NTP">NTP</option>
+                </select>
+              </label>
+
+              {addUserData.department === 'BED' && (
+                <div className="mb-2">
+                  <label className="form-label">GRADE</label>
+                  <select
+                    className="form-select form-select-sm rounded-pill"
+                    value={addUserData.sub}
+                    onChange={e => setAddUserData({...addUserData, sub: e.target.value})}
+                  >
+                    <option value="">Select Grade Level</option>
+                    <option>Grade 7</option>
+                    <option>Grade 8</option>
+                    <option>Grade 9</option>
+                    <option>Grade 10</option>
+                    <option>Grade 11</option>
+                    <option>Grade 12</option>
+                  </select>
+                </div>
+              )}
+
+              {addUserData.department === 'HED' && (
+                <div className="mb-2">
+                  <label className="form-label">PROGRAM</label>
+                  <select
+                    className="form-select form-select-sm rounded-pill"
+                    value={addUserData.sub}
+                    onChange={e => setAddUserData({...addUserData, sub: e.target.value})}
+                  >
+                    <option value="">Select Course</option>
+                    <option>BS Computer Science</option>
+                    <option>BS Business Administration</option>
+                    <option>BS Accountancy</option>
+                    <option>BS Management Accounting</option>
+                    <option>BS Social Work</option>
+                    <option>BS Ab Communication</option>
+                    <option>BS Psychology</option>
+                    <option>BS Teacher Education</option>
+                    <option>BS Nursing</option>
+                    <option>BS Pharmacy</option>
+                  </select>
+                </div>
+              )}
+
+              <label>PASSWORD
+                <input
+                  type="password"
+                  value={addUserData.password}
+                  onChange={e => setAddUserData({...addUserData, password: e.target.value})}
+                  className="regform-input"
+                />
+              </label>
+              <label>CONFIRM PASSWORD
+                <input
+                  type="password"
+                  value={addUserData.confirmPassword}
+                  onChange={e => setAddUserData({...addUserData, confirmPassword: e.target.value})}
+                  className="regform-input"
+                />
+              </label>
+
+              <button type="submit" className="regform-btn" disabled={addUserSuccess}>
+                {addUserSuccess ? 'Added' : 'Add User'}
+              </button>
+            </form>
+
+            <button className="regform-close" onClick={() => { setShowAddUserModal(false); setAddUserError(''); }}>
+              &times;
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Delete User Confirmation Modal */}
+      {showDeleteUserModal && deleteUserId && (
+        <div className="admin-modal-overlay">
+          <div className="admin-modal delete-modal" style={{maxWidth: '480px'}}>
+            <h3>Delete User{deleteUserName ? `: ${deleteUserName}` : ''}</h3>
+            {deleteUserError && (
+              <div style={{
+                padding: '10px 12px',
+                marginBottom: '16px',
+                backgroundColor: '#ffe0e0',
+                color: '#cc0000',
+                borderRadius: '6px',
+                fontSize: '0.9rem',
+                border: '1px solid #ff9999'
+              }}>
+                {deleteUserError}
+              </div>
+            )}
+            <p>Are you sure you want to delete this user? This action cannot be undone.</p>
+            <div className="modal-buttons">
+              <button
+                className="btn-cancel"
+                onClick={() => {
+                  setShowDeleteUserModal(false);
+                  setDeleteUserId(null);
+                  setDeleteUserName('');
+                  setDeleteUserError('');
+                }}
+              >
+                NO
+              </button>
+              <button className="btn-confirm" onClick={confirmDeleteUser}>
+                YES
               </button>
             </div>
           </div>
