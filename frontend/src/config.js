@@ -3,7 +3,7 @@
 
 const getApiBaseUrl = () => {
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    return 'http://localhost:8000';
+    return '"https://your-backend.onrender.com"';
   }
   return 'https://backend-58cw.onrender.com';
 };
