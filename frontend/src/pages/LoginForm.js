@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import '../styles/LoginForm.css';
+import API_BASE_URL from '../config';
 
 function LoginForm({ onClose, onRegister, onLoginSuccess }) {
   const [idNumber, setIdNumber] = useState('');
@@ -22,7 +23,7 @@ function LoginForm({ onClose, onRegister, onLoginSuccess }) {
     if(!idNumber.trim() || !password) { setError('ID and password are required'); return; }
     setLoading(true);
     try{
-      const res = await fetch('http://127.0.0.1:8000/auth/login', {
+      const res = await fetch(`${API_BASE_URL}/auth/login`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ id_number: idNumber, password })
